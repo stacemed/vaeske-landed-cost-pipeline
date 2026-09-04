@@ -73,6 +73,30 @@ def test_category_tag_comparison_is_case_insensitive():
 def test_unrecognized_doc_type_falls_back_to_other():
     doc = SourceDocument.from_filename("2025-01-15_WHSM_comp_INV-1_mystery.pdf")
     assert doc.doc_type is DocumentType.OTHER
+    assert doc.doc_type_raw == "mystery"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["pconf-bal1", "pconf-bal2", "pconf-bal3", "pconf-bal4"],
+)
+def test_numbered_payment_confirmation_suffixes_still_classify(suffix):
+    # Real Drive files: a multi-payment invoice gets pconf-bal1..bal4, one
+    # per partial payment.
+    doc = SourceDocument.from_filename(
+        f"2025-11-07_WHSM_Comp_INV-26Q1RCS_{suffix}.pdf"
+    )
+    assert doc.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert doc.doc_type_raw == suffix
+
+
+def test_overhead_category_tag_from_real_filename():
+    doc = SourceDocument.from_filename(
+        "2025-09-29_WH_Over_Inspection-250930_INV-paid.pdf"
+    )
+    assert doc.vendor_abbrev == "WH"
+    assert doc.category_tag == "Over"
+    assert doc.doc_type is DocumentType.PAID_INVOICE
 
 
 def test_accepts_full_path_and_keeps_only_the_basename():

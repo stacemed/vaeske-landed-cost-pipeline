@@ -11,6 +11,11 @@ dependencies = [
 dev = [
     "pytest>=8,<9",
 ]
+drive = [
+    "google-api-python-client>=2,<3",
+    "google-auth>=2,<3",
+    "google-auth-oauthlib>=1,<2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

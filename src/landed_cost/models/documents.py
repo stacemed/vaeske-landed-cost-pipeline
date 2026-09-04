@@ -10,6 +10,8 @@ e.g.::
     2025-01-15_WHSM_comp_INV-25Q1SLV26QTINNERBOX-01_INV-dep.pdf
     2024-12-26_FBSL_Frei-Bund_JG20241225E_INV-paid.pdf
     2025-06-11_FBSL_Frei-Bund_JG20250612E-Refurn_INV-refund.pdf
+    2025-09-29_WH_Over_Inspection-250930_INV-paid.pdf
+    2025-11-07_WHSM_Comp_INV-26Q1RCS_pconf-bal2.pdf
 
 This is the join key between a file in Google Drive and a row in the cost
 sheets. Component invoice numbers observed so far use hyphens, never
@@ -17,6 +19,12 @@ underscores, inside a single token -- the parser relies on that and will
 raise ``ValueError`` rather than guess if a filename doesn't split into
 exactly five underscore-delimited parts, so a non-conforming filename gets
 flagged for a human instead of silently mis-parsed.
+
+The doc-type token isn't always an exact match: a multi-payment invoice
+carries a numbered suffix, e.g. ``pconf-bal1`` .. ``pconf-bal4`` for four
+partial payment confirmations against one invoice. ``doc_type`` classifies
+by prefix (so all four are still ``PAYMENT_CONFIRMATION``); ``doc_type_raw``
+keeps the exact token so the distinction isn't lost.
 """
 
 from __future__ import annotations
@@ -28,12 +36,20 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from .enums import DocumentType
 
-_DOC_TYPE_BY_TOKEN = {
-    "inv-dep": DocumentType.DEPOSIT_INVOICE,
-    "inv-paid": DocumentType.PAID_INVOICE,
-    "inv-refund": DocumentType.REFUND_INVOICE,
-    "pconf": DocumentType.PAYMENT_CONFIRMATION,
-}
+_DOC_TYPE_PREFIXES = (
+    ("inv-dep", DocumentType.DEPOSIT_INVOICE),
+    ("inv-paid", DocumentType.PAID_INVOICE),
+    ("inv-refund", DocumentType.REFUND_INVOICE),
+    ("pconf", DocumentType.PAYMENT_CONFIRMATION),
+)
+
+
+def _classify_doc_type(token: str) -> DocumentType:
+    lowered = token.lower()
+    for prefix, doc_type in _DOC_TYPE_PREFIXES:
+        if lowered == prefix or lowered.startswith(prefix + "-"):
+            return doc_type
+    return DocumentType.OTHER
 
 
 class SourceDocument(BaseModel):
@@ -47,6 +63,7 @@ class SourceDocument(BaseModel):
     category_tag: str
     invoice_number: str
     doc_type: DocumentType
+    doc_type_raw: str
     extension: str
 
     @field_validator("vendor_abbrev", "category_tag", "invoice_number", "extension")
@@ -80,7 +97,7 @@ class SourceDocument(BaseModel):
         if "." not in doctype_and_ext:
             raise ValueError(f"missing file extension in {name!r}")
         doctype_token, extension = doctype_and_ext.rsplit(".", 1)
-        doc_type = _DOC_TYPE_BY_TOKEN.get(doctype_token.lower(), DocumentType.OTHER)
+        doc_type = _classify_doc_type(doctype_token)
 
         return cls(
             raw_filename=name,
@@ -89,5 +106,6 @@ class SourceDocument(BaseModel):
             category_tag=category_tag,
             invoice_number=invoice_number,
             doc_type=doc_type,
+            doc_type_raw=doctype_token,
             extension=extension,
         )

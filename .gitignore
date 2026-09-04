@@ -7,3 +7,8 @@ venv/
 .env
 build/
 dist/
+
+# Google Drive OAuth credentials -- never commit these
+client_secret*.json
+token.json
+credentials.json
