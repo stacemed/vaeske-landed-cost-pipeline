@@ -1,0 +1,20 @@
+[project]
+name = "landed-cost-pipeline"
+version = "0.1.0"
+description = "Automates the Vaeske / Black Oak Essentials landed-unit-cost workbook from Google Drive source documents."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
