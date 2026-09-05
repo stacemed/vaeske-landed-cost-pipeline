@@ -1,0 +1,190 @@
+from datetime import date
+
+from landed_cost.models import Category, DocumentType
+from landed_cost.drive.extract import extract_from_text, propose_filename
+from landed_cost.models import SourceDocument
+
+# Fixture texts below mirror the structure of real documents found in the
+# project's Drive folder (Linkhub freight invoices, Wells Fargo/Wise
+# confirmations, Weimin Huang inspection invoices) -- trimmed to the
+# lines the extractor actually keys on.
+
+FREIGHT_INVOICE_TEXT = """
+John Grattan Invoice JG20250421E
+
+INVOICE Shenzhen Linkhub CO., LTD
+Room 1801, Building 1, Wanting Building
+
+INVOICE No. JG20250421E US$3,651.21 INVOICE DATE 21-Apr-2025 DUE DATE 23-Apr-2025
+
+BILL TO
+VAESKE
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+DDP Sea Freight LTL LH02160460 Ship to IUSL
+Bundling 246units $186.44 flat rate 1 $186.44
+Subtotal $3,651.21
+THANK YOU FOR YOUR BUSINESS TOTAL US$3,651.21
+"""
+
+FREIGHT_WIRE_CONFIRMATION_TEXT = """
+Wire Money - Confirmation | Wells Fargo
+
+Confirmation
+
+You submitted your wire on 04/22/2025 at 11:44 am Pacific Time.
+
+TO FBABEE
+China
+
+ADDITIONAL INFORMATION
+
+JG20250421E
+
+MESSAGE TO RECIPIENT'S BANK
+
+JG20250421E
+
+STATUS PENDING
+"""
+
+FREIGHT_REFUND_TEXT = """
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20250612E-Refurn US$-2,861.85 INVOICE DATE 11-Jun-2025
+
+Discounts Over payment refund -$2,861.85 flat rate 1 -$2,861.85
+
+Subtotal -$2,861.85
+"""
+
+OVERHEAD_INVOICE_TEXT = """
+From: Whymon Huang (WEIMIN HUANG) Inspection Invoice
+
+#INV-Inspection-250930
+
+Balance Paid $118.00)
+
+Bill To Vaeske
+
+Invoice Date: 29-Sep-25 Attn: John Grattan Terms: Custom Due Date: 30-Sep-25
+
+Subject: Transport fee Duration: 2 Man Day
+"""
+
+COMPONENTS_WIRE_TEXT = """
+Transfer confirmation
+
+Transfer created November 05, 2025 08:31:26 GMT-05:00
+
+Your details
+Name BLACK OAK ESSENTIALS LLC
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference INV-26Q1RCS payment 2b
+"""
+
+COMPONENTS_WIRE_TRANSFER_TEXT = """
+WT FED#03350 COMMUNITY FEDERAL /FTR/BNF=Shenzhen Minzhi BYJ Trading Company
+Invoice # INV-25Q1SLV26QTINNERBOX-01 26 QT Inner Box order
+"""
+
+UNKNOWN_TEXT = "Some random receipt from a coffee shop, nothing to do with any vendor here."
+
+
+def test_freight_invoice_extracts_confidently():
+    extracted = extract_from_text(FREIGHT_INVOICE_TEXT)
+
+    assert extracted.vendor_abbrev == "FBSL"
+    assert extracted.category is Category.FREIGHT_BUNDLING_PACKAGING
+    assert extracted.category_tag == "Frei-Bund"
+    assert extracted.invoice_number == "JG20250421E"
+    assert extracted.doc_date == date(2025, 4, 21)
+    assert extracted.doc_type is DocumentType.PAID_INVOICE
+    assert extracted.issues == ()
+    assert extracted.is_ready_to_file is True
+
+
+def test_freight_wire_confirmation_detected_as_payment_confirmation():
+    extracted = extract_from_text(FREIGHT_WIRE_CONFIRMATION_TEXT)
+
+    assert extracted.vendor_abbrev == "FBSL"
+    assert extracted.invoice_number == "JG20250421E"
+    assert extracted.doc_date == date(2025, 4, 22)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.is_ready_to_file is True
+
+
+def test_freight_refund_detected_from_keywords():
+    extracted = extract_from_text(FREIGHT_REFUND_TEXT)
+
+    assert extracted.invoice_number == "JG20250612E-Refurn"
+    assert extracted.doc_type is DocumentType.REFUND_INVOICE
+
+
+def test_overhead_invoice_extracts_confidently():
+    extracted = extract_from_text(OVERHEAD_INVOICE_TEXT)
+
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.category_tag == "Over"
+    assert extracted.invoice_number == "INV-Inspection-250930"
+    assert extracted.doc_date == date(2025, 9, 29)
+    assert extracted.doc_type is DocumentType.PAID_INVOICE
+    assert extracted.is_ready_to_file is True
+
+
+def test_components_never_ready_to_file_even_with_good_matches():
+    extracted = extract_from_text(COMPONENTS_WIRE_TEXT)
+
+    assert extracted.vendor_abbrev == "WHSM"
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-26Q1RCS"
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    # Always flagged, by design, regardless of how good the guess looks.
+    assert extracted.is_ready_to_file is False
+    assert any("no consistent format" in issue for issue in extracted.issues)
+
+
+def test_components_extracts_from_wire_transfer_memo():
+    extracted = extract_from_text(COMPONENTS_WIRE_TRANSFER_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-25Q1SLV26QTINNERBOX-01"
+    assert extracted.is_ready_to_file is False
+
+
+def test_unknown_vendor_returns_no_fields_and_an_issue():
+    extracted = extract_from_text(UNKNOWN_TEXT)
+
+    assert extracted.vendor_abbrev is None
+    assert extracted.category is None
+    assert extracted.is_ready_to_file is False
+    assert len(extracted.issues) == 1
+
+
+def test_empty_text_is_handled_like_unknown_vendor():
+    extracted = extract_from_text("")
+    assert extracted.is_ready_to_file is False
+    assert extracted.issues
+
+
+def test_propose_filename_fills_in_all_fields_when_confident():
+    extracted = extract_from_text(FREIGHT_INVOICE_TEXT)
+    name = propose_filename(extracted, "pdf")
+
+    assert name == "2025-04-21_FBSL_Frei-Bund_JG20250421E_INV-paid.pdf"
+    # The generator and the parser must stay in sync with each other.
+    parsed = SourceDocument.from_filename(name)
+    assert parsed.invoice_number == "JG20250421E"
+    assert parsed.doc_type is DocumentType.PAID_INVOICE
+
+
+def test_propose_filename_uses_placeholders_for_missing_fields():
+    extracted = extract_from_text(UNKNOWN_TEXT)
+    name = propose_filename(extracted, "pdf")
+
+    assert name == "UNKNOWN-DATE_UNKNOWN-VENDOR_UNKNOWN-CATEGORY_UNKNOWN-INVOICE_UNKNOWN-DOCTYPE.pdf"

@@ -34,3 +34,15 @@ class DriveClient(Protocol):
     def list_children(self, folder_id: str) -> list[DriveFile]:
         """List the immediate (non-recursive) children of a folder."""
         ...
+
+    def download_file(self, file_id: str) -> bytes:
+        """Download a file's raw content."""
+        ...
+
+    def rename_file(self, file_id: str, new_name: str) -> None:
+        """Rename a file in place."""
+        ...
+
+    def move_file(self, file_id: str, new_parent_id: str, old_parent_id: str) -> None:
+        """Move a file from one parent folder to another."""
+        ...

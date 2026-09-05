@@ -3,9 +3,16 @@
 Requires the optional ``drive`` dependency group
 (``pip install -e ".[drive]"``) plus credentials -- see
 docs/DRIVE_INGESTION.md for how to set those up. This module is never
-imported by ``landed_cost.drive.ingest`` itself, so the ingestion logic
-and its tests never need these dependencies installed; only code that
-actually talks to Drive does.
+imported by ``landed_cost.drive.ingest`` or ``landed_cost.drive.inbox``
+themselves, so the ingestion/extraction logic and its tests never need
+these dependencies installed; only code that actually talks to Drive
+does.
+
+Uses the full ``drive`` scope, not the narrower ``drive.file`` scope:
+``drive.file`` only grants access to files the app itself created or that
+the user picked through a Drive Picker UI, neither of which applies here
+-- these are pre-existing files in a folder shared with your account, so
+reading and renaming/moving them needs full access.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ from typing import Any
 from .client import DriveFile
 
 _LIST_FIELDS = "nextPageToken, files(id, name, mimeType, parents)"
-_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+_SCOPE = "https://www.googleapis.com/auth/drive"
 
 
 class GoogleDriveClient:
@@ -36,7 +43,7 @@ class GoogleDriveClient:
         from googleapiclient.discovery import build
 
         credentials = service_account.Credentials.from_service_account_file(
-            path, scopes=[_READONLY_SCOPE]
+            path, scopes=[_SCOPE]
         )
         return cls(build("drive", "v3", credentials=credentials))
 
@@ -49,7 +56,7 @@ class GoogleDriveClient:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
-        credentials = Credentials.from_authorized_user_file(path, scopes=[_READONLY_SCOPE])
+        credentials = Credentials.from_authorized_user_file(path, scopes=[_SCOPE])
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
         return cls(build("drive", "v3", credentials=credentials))
@@ -85,3 +92,17 @@ class GoogleDriveClient:
             if not page_token:
                 break
         return files
+
+    def download_file(self, file_id: str) -> bytes:
+        return self._service.files().get_media(fileId=file_id).execute()
+
+    def rename_file(self, file_id: str, new_name: str) -> None:
+        self._service.files().update(fileId=file_id, body={"name": new_name}).execute()
+
+    def move_file(self, file_id: str, new_parent_id: str, old_parent_id: str) -> None:
+        self._service.files().update(
+            fileId=file_id,
+            addParents=new_parent_id,
+            removeParents=old_parent_id,
+            body={},
+        ).execute()

@@ -15,19 +15,27 @@ allocation, the bill of materials, unit cost, year-end inventory, and the
 tie-out checks), each validated against real numbers pulled from the
 source workbook. See [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
 
-**Milestone 2: Google Drive ingestion — in progress.** Given the root
-"Support Docs" folder, lists each category subfolder, parses every
-filename with `SourceDocument`, and flags anything that doesn't conform
-or looks misfiled. See [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md)
-for the folder layout, credential setup, and how to run it.
+**Milestone 2: Google Drive ingestion — in progress.**
+- Category ingestion: given the root "Support Docs" folder, lists each
+  category subfolder, parses every filename with `SourceDocument`, and
+  flags anything that doesn't conform or looks misfiled.
+- Inbox processing: drop a file with any name into an `Inbox` folder;
+  reads the PDF's own text, guesses the standardized filename + category,
+  and (only with `--apply`) renames and files it, or moves it to
+  `Needs Review` if it can't guess confidently (components never
+  auto-file — see the doc for why).
+
+See [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md) for the folder
+layout, credential setup, and how to run both.
 
 Not built yet, in planned order:
 
 1. A Google Sheets client that reads/writes the exact ranges the models
    above are shaped around, so the mapping can't silently drift from the
    real sheet.
-2. Per-vendor invoice/packing-list parsers that produce populated model
-   rows from PDFs, with a review step before anything feeds a tax number.
+2. Wiring the confidently-extracted fields (freight, overhead) into
+   populated `FreightInvoiceRegister` / etc. rows; a review step before
+   anything feeds a tax number for the categories that can't auto-extract.
 3. A reconciliation runner that recomputes every `ControlCheck` after a
    pipeline run and refuses to post a "final" set of numbers unless every
    check reads `OK`, matching the workbook's own rule: "if one does not
@@ -37,12 +45,16 @@ Not built yet, in planned order:
 
 ```
 src/landed_cost/models/   # the data model (milestone 1)
-src/landed_cost/drive/    # Drive folder ingestion + filename parsing (milestone 2)
-scripts/                  # runnable entry points, e.g. ingest_drive_folder.py
+src/landed_cost/drive/    # Drive ingestion, filename parsing, and PDF-text
+                           # field extraction (milestone 2)
+scripts/                  # runnable entry points:
+                           #   ingest_drive_folder.py  (report on category folders)
+                           #   process_inbox.py        (guess + file Inbox contents)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
 docs/DRIVE_INGESTION.md   # Drive folder layout + credential setup
 tests/                    # tests, several checked against real numbers /
-                           # filenames from the source workbook and Drive
+                           # filenames / invoice text from the source
+                           # workbook and Drive
 ```
 
 ## Development
