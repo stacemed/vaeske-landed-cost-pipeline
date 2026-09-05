@@ -94,6 +94,65 @@ Invoice # INV-25Q1SLV26QTINNERBOX-01 26 QT Inner Box order
 
 UNKNOWN_TEXT = "Some random receipt from a coffee shop, nothing to do with any vendor here."
 
+# The four fixtures below are trimmed from real 2024 Drive files that
+# exposed genuine bugs during the first real-world dry run (2026-09-05).
+
+COMPONENTS_WHYMON_FEDWIRE_TEXT = """
+Wire Money - Confirmation | Wells Fargo
+
+Confirmation
+
+You submitted your wire on 12/16/2024 at 11:08 am Pacific Time.
+
+TO WHYMON FEDWIRE
+
+United States
+
+AMOUNT $19,817.37
+
+MESSAGE TO RECIPIENT'S BANK
+
+INV USQ4RR12C26C
+
+STATUS PENDING
+"""
+
+COMPONENTS_WIRE_SUCCESSFULLY_SUBMITTED_TEXT = """
+Confirmation
+
+You successfully submitted your wire on 04/21/2024 at 08:57 pm Pacific Time.
+
+To Whymon FedWire
+
+United States
+
+Amount $10,395.00
+
+Message to recipient's bank
+
+racks invoice US3RD24 03
+
+Status Scheduled
+"""
+
+# A real Shenzhen Minzhi BYJ invoice has a line reading "Invoice ...
+# Subject: TTL BALANCE payment ..." -- before the digit filter, "Subject"
+# itself got captured as the "invoice number" since it's a capitalized
+# word immediately following "Invoice".
+COMPONENTS_SUBJECT_FALSE_POSITIVE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Invoice Subject: TTL BALANCE payment for Q4 2024 order US3rdR2401
+"""
+
+COMPONENTS_NO_DIGIT_CANDIDATE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Invoice Subject: no reference numbers anywhere in this memo
+"""
+
+FILENAME_STUB_TEXT = "INV-USR2312-01 YY 2nd Racks Balance 240106.xlsx"
+
 
 def test_freight_invoice_extracts_confidently():
     extracted = extract_from_text(FREIGHT_INVOICE_TEXT)
@@ -188,3 +247,51 @@ def test_propose_filename_uses_placeholders_for_missing_fields():
     name = propose_filename(extracted, "pdf")
 
     assert name == "UNKNOWN-DATE_UNKNOWN-VENDOR_UNKNOWN-CATEGORY_UNKNOWN-INVOICE_UNKNOWN-DOCTYPE.pdf"
+
+
+def test_whymon_fedwire_wire_confirmation_recognized_as_components():
+    # Real bug (2026-09-05): a domestic wire to Weimin Huang shows the
+    # payee as "WHYMON FEDWIRE" -- never his name or company -- so this
+    # never matched any vendor keyword at all before "whymon" was added.
+    extracted = extract_from_text(COMPONENTS_WHYMON_FEDWIRE_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.vendor_abbrev == "WHSM"
+    assert extracted.doc_date == date(2024, 12, 16)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+
+
+def test_wire_confirmation_tolerates_successfully_submitted_phrasing():
+    # Real bug: an older Wells Fargo template reads "You successfully
+    # submitted your wire on 04/21/2024" -- the extra word broke both the
+    # doc-type keyword match and the date regex.
+    extracted = extract_from_text(COMPONENTS_WIRE_SUCCESSFULLY_SUBMITTED_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.doc_date == date(2024, 4, 21)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+
+
+def test_invoice_number_extraction_skips_non_digit_false_positive():
+    # Real bug: "Invoice Subject: ..." used to capture "Subject" itself as
+    # the invoice number, since the old regex had no digit requirement.
+    # It should skip that and find the later, real-looking candidate.
+    extracted = extract_from_text(COMPONENTS_SUBJECT_FALSE_POSITIVE_TEXT)
+
+    assert extracted.invoice_number == "US3rdR2401"
+
+
+def test_invoice_number_extraction_gives_up_cleanly_with_no_digit_candidate():
+    extracted = extract_from_text(COMPONENTS_NO_DIGIT_CANDIDATE_TEXT)
+
+    assert extracted.invoice_number is None
+
+
+def test_filename_stub_text_is_not_mistaken_for_real_content():
+    # Real case: a few PDFs (apparently converted from an embedded .xlsx)
+    # gave back only their own filename as "extracted text".
+    extracted = extract_from_text(FILENAME_STUB_TEXT)
+
+    assert extracted.is_ready_to_file is False
+    assert extracted.vendor_abbrev is None
+    assert any("just a filename" in issue for issue in extracted.issues)

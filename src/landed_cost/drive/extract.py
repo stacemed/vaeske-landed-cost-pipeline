@@ -10,6 +10,13 @@ flagged with an issue -- never silently auto-filed -- no matter how
 plausible a guess looks, and a human confirms the invoice number and doc
 type by hand for that category.
 
+Tuned 2026-09-05 against a real batch of 85 2024 invoices/confirmations:
+domestic wire confirmations to Weimin Huang show the payee as "WHYMON
+FEDWIRE", never his name or company, so that's now a components-vendor
+signal in its own right; some older Wells Fargo confirmations read "You
+successfully submitted your wire" instead of "You submitted your wire";
+and dates aren't always zero-padded (``4/21/2024``, not ``04/21/2024``).
+
 Never raises: an unrecognized document comes back with every field None
 and an issue explaining why, so one weird PDF doesn't stop a batch run.
 """
@@ -29,10 +36,15 @@ _DATE_FORMATS = ("%d-%b-%Y", "%d-%b-%y", "%m/%d/%Y", "%Y-%m-%d")
 _WIRE_CONFIRMATION_KEYWORDS = (
     "wire money - confirmation",
     "you submitted your wire",
+    "you successfully submitted your wire",
     "transfer confirmation",
     "wise us inc",
 )
 _REFUND_KEYWORDS = ("refund", "over payment", "overpayment")
+
+# The entire extracted text is a bare filename -- Drive couldn't read this
+# file's real content (seen with PDFs converted from an embedded .xlsx).
+_FILENAME_STUB_RE = re.compile(r"^[\w .,&()'-]+\.(?:xlsx|xls|docx|doc|pdf|csv)$", re.IGNORECASE)
 
 _KNOWN_COMPONENT_NAMES = (
     "rack box",
@@ -83,10 +95,21 @@ class ExtractedInvoice(BaseModel):
 
 
 def _find_first(text: str, patterns: list[str]) -> str | None:
+    """Return the first regex match across ``patterns`` that contains at
+    least one digit.
+
+    Every real invoice number in this business has a digit in it (dates,
+    order codes, quantities baked into the code). Without this filter, a
+    loose pattern like "invoice ... <word>" happily captures ordinary
+    words such as "Subject" or "Transfer" when they follow the word
+    "invoice" or "order" in running text -- a real false positive seen in
+    a components wire-confirmation batch (2026-09-05).
+    """
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1)
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            candidate = match.group(1)
+            if any(ch.isdigit() for ch in candidate):
+                return candidate
     return None
 
 
@@ -114,15 +137,28 @@ def _guess_doc_type(text: str, default: DocumentType | None) -> DocumentType | N
 
 
 def extract_from_text(text: str) -> ExtractedInvoice:
-    lowered = text.lower()
+    stripped = text.strip()
+    if _FILENAME_STUB_RE.match(stripped):
+        return ExtractedInvoice(
+            issues=(
+                "extracted text is just a filename, not real content -- Drive "
+                "could not read this file (seen with PDFs converted from an "
+                "embedded spreadsheet)",
+            )
+        )
+
+    lowered = stripped.lower()
 
     if "shenzhen linkhub" in lowered or "fbabee" in lowered:
         return _extract_freight(text)
 
-    if "weimin huang" in lowered and "inspection" in lowered:
+    if ("weimin huang" in lowered or "whymon huang" in lowered) and "inspection" in lowered:
         return _extract_overhead(text)
 
-    if "weimin huang" in lowered or "shenzhen minzhi" in lowered or "byj trading" in lowered:
+    if any(
+        keyword in lowered
+        for keyword in ("weimin huang", "whymon", "shenzhen minzhi", "byj trading")
+    ):
         return _extract_components(text)
 
     return ExtractedInvoice(issues=("could not identify a known vendor in the document text",))
@@ -139,8 +175,9 @@ def _extract_freight(text: str) -> ExtractedInvoice:
         text,
         [
             r"INVOICE DATE\s+(\d{1,2}-[A-Za-z]{3}-\d{4})",
-            r"You submitted your wire on\s+(\d{2}/\d{2}/\d{4})",
-            r"SEND ON\s+(\d{2}/\d{2}/\d{4})",
+            r"INVOICE DATE\s+(\d{1,2}/\d{1,2}/\d{4})",
+            r"You (?:successfully )?submitted your wire on\s+(\d{1,2}/\d{1,2}/\d{4})",
+            r"SEND ON\s+(\d{1,2}/\d{1,2}/\d{4})",
         ],
     )
     if doc_date is None:
@@ -203,7 +240,7 @@ def _extract_components(text: str) -> ExtractedInvoice:
         text,
         [
             r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})",
-            r"You submitted your wire on\s+(\d{2}/\d{2}/\d{4})",
+            r"You (?:successfully )?submitted your wire on\s+(\d{1,2}/\d{1,2}/\d{4})",
         ],
     )
     if doc_date is None:
