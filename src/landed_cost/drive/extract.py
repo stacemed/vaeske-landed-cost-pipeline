@@ -17,6 +17,11 @@ signal in its own right; some older Wells Fargo confirmations read "You
 successfully submitted your wire" instead of "You submitted your wire";
 and dates aren't always zero-padded (``4/21/2024``, not ``04/21/2024``).
 
+2026-09-08: overhead invoice numbers drop the source text's "INV-"
+prefix (``#INV-Inspection-250930`` in the PDF becomes ``Inspection-250930``
+in the filename) -- redundant next to the doc-type suffix that already
+says INV-paid/pconf/etc.
+
 Never raises: an unrecognized document comes back with every field None
 and an issue explaining why, so one weird PDF doesn't stop a batch run.
 """
@@ -199,9 +204,14 @@ def _extract_freight(text: str) -> ExtractedInvoice:
 def _extract_overhead(text: str) -> ExtractedInvoice:
     issues: list[str] = []
 
-    invoice_number = _find_first(text, [r"#\s*(INV-Inspection-[\w&]+)"])
+    # The source text reads "#INV-Inspection-250930", but the "INV-" is
+    # redundant in the filename (the doc-type suffix already says
+    # INV-paid/pconf/etc.) -- captured group excludes it, per 2026-09-08.
+    invoice_number = _find_first(
+        text, [r"#\s*(?:INV-)?(Inspection-[\w&]+)"]
+    )
     if invoice_number is None:
-        issues.append("could not find an '#INV-Inspection-...' reference")
+        issues.append("could not find a '#[INV-]Inspection-...' reference")
 
     doc_date = _find_date(text, [r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})"])
     if doc_date is None:

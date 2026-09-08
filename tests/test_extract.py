@@ -190,10 +190,24 @@ def test_overhead_invoice_extracts_confidently():
     assert extracted.vendor_abbrev == "WH"
     assert extracted.category is Category.OVERHEAD
     assert extracted.category_tag == "Over"
-    assert extracted.invoice_number == "INV-Inspection-250930"
+    # "INV-" is dropped from the source text's "#INV-Inspection-250930" --
+    # redundant next to the doc-type suffix (2026-09-08).
+    assert extracted.invoice_number == "Inspection-250930"
     assert extracted.doc_date == date(2025, 9, 29)
     assert extracted.doc_type is DocumentType.PAID_INVOICE
     assert extracted.is_ready_to_file is True
+
+
+def test_overhead_invoice_number_without_inv_prefix_in_source_text():
+    text = """
+    From: Whymon Huang (WEIMIN HUANG) Inspection Invoice
+
+    #Inspection-241027
+
+    Invoice Date: 27-Nov-24
+    """
+    extracted = extract_from_text(text)
+    assert extracted.invoice_number == "Inspection-241027"
 
 
 def test_components_never_ready_to_file_even_with_good_matches():
