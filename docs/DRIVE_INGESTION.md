@@ -59,23 +59,63 @@ tries to identify the vendor, then extracts the rest from patterns
 specific to that vendor. How reliable this is varies a lot by category,
 and the code is upfront about it rather than pretending otherwise:
 
-- **Freight (Shenzhen Linkhub)** and **overhead (Weimin Huang inspection
-  invoices)** follow tight, regular formats -- a `JG########E` invoice
-  number, a dated `INVOICE DATE` or `Invoice Date:` line, a recognizable
-  bank wire confirmation header. These extract confidently and get
-  auto-filed with `--apply`.
+- **Freight (Shenzhen Linkhub)** and **overhead (Weimin Huang's own
+  invoices -- Inspection, Support, and likely other service types under
+  the same template)** follow tight, regular formats -- a `JG########E`
+  invoice number, a `#[INV-]<Type>-<ref>` reference, a dated `INVOICE
+  DATE` or `Invoice Date:` line, a recognizable bank wire confirmation
+  header. These extract confidently and get auto-filed with `--apply`.
 - **Components** never auto-file, on purpose. Vendors use inconsistent,
   one-off invoice-number formats, and the workbook itself has purchase
   lines with no invoice number recorded at all (see `ComponentPurchaseLine`
   in `docs/DATA_MODEL.md`). A components document always lands in Needs
-  Review with its best guess attached, for a human to confirm.
-- Anything from an unrecognized vendor, or a scanned PDF with no text
-  layer at all, also goes to Needs Review with an explanation of what
-  failed.
+  Review with its best guess attached, for a human to confirm. A wire
+  confirmation or invoice that mentions Weimin Huang by name but doesn't
+  carry his own invoice reference is also treated as components rather
+  than risk misfiling it as overhead -- the safe direction, since
+  components never auto-file anyway.
+- Anything from an unrecognized vendor also goes to Needs Review with an
+  explanation of what failed.
+- A PDF with **no real text layer** (a scan or phone photo) falls back to
+  OCR -- see below. **OCR'd text never auto-files either**, no matter how
+  clean the guess looks: confirmed on real files that OCR misreads
+  characters ("Bundle" → "Bunlde", "Huang" → "Huana", a stray space
+  inserted inside a reference number), so a human always confirms an
+  OCR'd document by hand.
 
 The generator and the parser are tested against each other (a proposed
 filename must parse back through `SourceDocument.from_filename` to the
 same fields), so they can't silently drift apart.
+
+## OCR fallback
+
+Some source documents are scans or phone photos saved as PDF. Confirmed
+2026-09-09 on real Drive files: `pypdf` returns no text *and* finds no
+embedded image objects on the page (the content is drawn straight onto
+the page, not stored as something `pypdf`'s shortcut can find) -- yet the
+same files are perfectly readable to a person, and to OCR once the page
+is rendered to an image.
+
+`landed_cost.drive.pdf_text.extract_text_with_ocr_fallback` is what
+`process_inbox.py` actually uses: it tries the real text layer first and
+only falls back to rendering the page and running Tesseract OCR on it
+when that comes back empty. This needs:
+
+- The optional `ocr` dependency group: `pip install -e ".[drive,ocr]"`
+  (PyMuPDF for rendering, pytesseract + Pillow for OCR).
+- The system `tesseract-ocr` binary, which pip can't install --
+  `apt install tesseract-ocr` (Debian/Ubuntu) or `brew install tesseract`
+  (macOS).
+
+If a document's text layer is genuinely empty and the OCR extras aren't
+installed, `process_inbox.py` will raise an import error at that point
+rather than silently skip OCR -- install the extras rather than working
+around it, since silently falling back to "no text" would just recreate
+the original Needs Review pile.
+
+Every proposal built from OCR'd text carries `via_ocr=True` and the
+CLI marks it `[OCR]` in its output; `propose_from_text`'s `ready_to_file`
+is forced `False` for these even when every field extracted cleanly.
 
 ## Setting up credentials
 
@@ -87,6 +127,15 @@ for reading PDF text) and an OAuth credential:
 
 ```
 pip install -e ".[drive]"
+```
+
+Add the `ocr` group too (plus the system `tesseract-ocr` binary -- see
+"OCR fallback" below) if you want scanned/photographed documents with no
+text layer to be read at all rather than always landing in Needs Review
+with a "could not extract any text" issue:
+
+```
+pip install -e ".[drive,ocr]"
 ```
 
 For a folder that's shared with your own Google account (as this one is),

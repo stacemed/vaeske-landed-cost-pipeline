@@ -7,7 +7,11 @@ Without --apply this only prints what it *would* do; nothing on Drive
 changes. Anything that can't be confidently classified (most notably
 every component invoice -- see docs/DATA_MODEL.md on why) moves to Needs
 Review with its original filename intact, never guessed onto the file
-itself.
+itself. A PDF with no real text layer (a scan or phone photo) falls back
+to OCR -- requires the optional `ocr` dependency group and the system
+`tesseract-ocr` binary, see docs/DRIVE_INGESTION.md -- and text read that
+way never marks a document ready to file either, since OCR misreads
+characters.
 
 Usage:
     python scripts/process_inbox.py <root_folder_id> --credentials token.json
@@ -68,7 +72,8 @@ def main() -> int:
 
     for proposal in proposals:
         status = "READY" if proposal.ready_to_file else "NEEDS REVIEW"
-        print(f"\n[{status}] {proposal.original_name}")
+        ocr_tag = " [OCR]" if proposal.via_ocr else ""
+        print(f"\n[{status}]{ocr_tag} {proposal.original_name}")
         print(f"  -> {proposal.proposed_name}")
         for issue in proposal.extracted.issues:
             print(f"  ! {issue}")

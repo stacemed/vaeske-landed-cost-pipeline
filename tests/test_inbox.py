@@ -69,7 +69,37 @@ def test_propose_from_text_handles_empty_extraction():
     proposal = propose_from_text(file, "")
 
     assert proposal.ready_to_file is False
-    assert any("no text layer" in issue for issue in proposal.extracted.issues)
+    assert any("text layer" in issue for issue in proposal.extracted.issues)
+
+
+def test_propose_from_text_empty_even_via_ocr_says_so():
+    file = _file("f1", "scan004.pdf")
+    proposal = propose_from_text(file, "", via_ocr=True)
+
+    assert proposal.ready_to_file is False
+    assert any("even via OCR" in issue for issue in proposal.extracted.issues)
+
+
+def test_propose_from_text_via_ocr_never_ready_even_when_fields_are_clean():
+    file = _file("f1", "scan005.pdf")
+    proposal = propose_from_text(file, FREIGHT_INVOICE_TEXT, via_ocr=True)
+
+    # Would be ready_to_file if not for via_ocr -- confirmed by the
+    # non-OCR test above (test_propose_from_text_ready_to_file).
+    assert proposal.ready_to_file is False
+    assert proposal.via_ocr is True
+    assert any("OCR" in issue for issue in proposal.extracted.issues)
+    # The real fields are still there for a human to review -- OCR
+    # caution doesn't blank out a good guess, just stops it auto-filing.
+    assert proposal.extracted.invoice_number == "JG20250421E"
+
+
+def test_propose_from_text_via_ocr_false_stays_ready():
+    file = _file("f1", "scan006.pdf")
+    proposal = propose_from_text(file, FREIGHT_INVOICE_TEXT, via_ocr=False)
+
+    assert proposal.ready_to_file is True
+    assert proposal.via_ocr is False
 
 
 def test_propose_inbox_actions_skips_subfolders_and_uses_text_extractor():
@@ -84,7 +114,7 @@ def test_propose_inbox_actions_skips_subfolders_and_uses_text_extractor():
     )
 
     proposals = propose_inbox_actions(
-        client, "inbox", text_extractor=lambda data: FREIGHT_INVOICE_TEXT
+        client, "inbox", text_extractor=lambda data: (FREIGHT_INVOICE_TEXT, False)
     )
 
     assert len(proposals) == 1

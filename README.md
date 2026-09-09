@@ -20,10 +20,12 @@ source workbook. See [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
   category subfolder, parses every filename with `SourceDocument`, and
   flags anything that doesn't conform or looks misfiled.
 - Inbox processing: drop a file with any name into an `Inbox` folder;
-  reads the PDF's own text, guesses the standardized filename + category,
-  and (only with `--apply`) renames and files it, or moves it to
-  `Needs Review` if it can't guess confidently (components never
-  auto-file — see the doc for why).
+  reads the PDF's own text (falling back to OCR for scans/photos with no
+  text layer), guesses the standardized filename + category, and (only
+  with `--apply`) renames and files it, or moves it to `Needs Review` if
+  it can't guess confidently — components never auto-file, and neither
+  does anything read via OCR, since both carry a real misread risk that
+  needs a human check.
 
 See [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md) for the folder
 layout, credential setup, and how to run both.

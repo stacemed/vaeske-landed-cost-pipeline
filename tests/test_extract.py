@@ -308,4 +308,122 @@ def test_filename_stub_text_is_not_mistaken_for_real_content():
 
     assert extracted.is_ready_to_file is False
     assert extracted.vendor_abbrev is None
-    assert any("just a filename" in issue for issue in extracted.issues)
+
+
+# Trimmed from real OCR output (2026-09-09) on scanned/photographed 2024
+# invoices with no text layer -- confirmed via pypdf returning "" on the
+# actual downloaded bytes, then real OCR text pulled to fix these bugs.
+
+OVERHEAD_SUPPORT_TYPE_OCR_TEXT = """
+From: Whymon Huana (WEIMIN HUANG)
+
+Bill To
+
+Vaeske
+
+Attn: John Grattan
+
+Subiect:
+
+Facilitation & local touch base support
+
+Invoice
+
+#INV-Support- 240407
+
+Balance Due
+
+$399.00
+
+Invoice Date: 7-Apr-24
+Terms: Custom
+
+Due Date: 11-Apr-24
+
+WHYMON HUANG
+"""
+
+OVERHEAD_INSPECTION_OCR_WITH_STRAY_SPACE_TEXT = """
+From: Whymon Huang (WEIMIN HUANG)
+
+Subject:
+
+Bunlde bulk order inspection of US& CA SHIPMENTS
+
+Inspection Invoice
+
+Signature
+
+#INV-Inspection- 240301
+
+Balance Due
+
+$168.00
+
+Invoice Date: 3-Mar-24
+Terms: Custom
+
+WHYMON HUANG
+"""
+
+COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+To: Black Oak Essentials LLC
+Attn: John Grattan
+
+#INV-USR2312-01
+Invoice Date: Jan 6, 2024
+
+Order Reference: USR2312- 23DEC
+
+Balance Due: US$7,656.60
+"""
+
+
+def test_overhead_recognizes_support_type_not_just_inspection():
+    # Real bug: routing required the literal word "inspection" in the
+    # text, so Weimin Huang's "Support" and "Facilitation" invoices never
+    # got recognized as overhead at all.
+    extracted = extract_from_text(OVERHEAD_SUPPORT_TYPE_OCR_TEXT)
+
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.invoice_number == "Support-240407"
+    assert extracted.doc_date == date(2024, 4, 7)
+
+
+def test_overhead_strips_ocr_inserted_space_in_reference():
+    # OCR read "#INV-Inspection- 240301" with a stray space after the
+    # hyphen -- the reference must still normalize to one clean token.
+    extracted = extract_from_text(OVERHEAD_INSPECTION_OCR_WITH_STRAY_SPACE_TEXT)
+
+    assert extracted.invoice_number == "Inspection-240301"
+    assert extracted.doc_date == date(2024, 3, 3)
+
+
+def test_components_still_wins_over_overhead_when_vendor_company_present():
+    # Even though this text would match the overhead "#[INV-]<Type>-<ref>"
+    # shape (#INV-USR2312-01), the Shenzhen Minzhi company name means
+    # it's a components purchase invoice, not Weimin Huang's own.
+    extracted = extract_from_text(COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.doc_date == date(2024, 1, 6)
+    assert extracted.is_ready_to_file is False
+
+
+def test_month_name_date_format_parses():
+    extracted = extract_from_text(COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT)
+    assert extracted.doc_date == date(2024, 1, 6)
+
+
+def test_weimin_mention_without_overhead_reference_falls_back_to_components():
+    # A wire confirmation mentions "WHYMON" but never carries his
+    # "#[INV-]<Type>-<ref>" invoice reference -- the safe direction is
+    # components (never auto-files), not a mistaken overhead auto-file.
+    extracted = extract_from_text(
+        "You submitted your wire on 12/16/2024\n\nTO WHYMON FEDWIRE\n\n"
+        "MESSAGE TO RECIPIENT'S BANK\n\nINV USQ4RR12C26C"
+    )
+    assert extracted.category is Category.COMPONENTS

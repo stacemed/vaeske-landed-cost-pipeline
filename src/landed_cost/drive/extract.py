@@ -22,6 +22,19 @@ prefix (``#INV-Inspection-250930`` in the PDF becomes ``Inspection-250930``
 in the filename) -- redundant next to the doc-type suffix that already
 says INV-paid/pconf/etc.
 
+2026-09-09: OCR'd two more real overhead invoices and found Weimin Huang
+issues more than one invoice *type* under the same "#INV-<Type>-######"
+template -- "Inspection" and "Support" confirmed so far, likely others.
+Routing no longer hardcodes "inspection": any text mentioning him (or his
+"WHYMON" wire alias) that also contains a "#[INV-]<Word>-<ref>"-shaped
+reference is treated as overhead; the same text without that reference
+(a wire confirmation, a mention in passing) falls back to components,
+which is the safe direction since components never auto-file anyway.
+OCR itself misreads characters (seen: "Bundle" -> "Bunlde", a stray
+space inside a reference number) -- text that came from OCR rather than
+a real text layer never marks a document ready_to_file regardless of how
+clean the guess looks; see ``InboxProposal.via_ocr`` in ``inbox.py``.
+
 Never raises: an unrecognized document comes back with every field None
 and an issue explaining why, so one weird PDF doesn't stop a batch run.
 """
@@ -36,7 +49,14 @@ from pydantic import BaseModel, ConfigDict
 
 from ..models.enums import Category, DocumentType
 
-_DATE_FORMATS = ("%d-%b-%Y", "%d-%b-%y", "%m/%d/%Y", "%Y-%m-%d")
+_DATE_FORMATS = ("%d-%b-%Y", "%d-%b-%y", "%m/%d/%Y", "%Y-%m-%d", "%b %d, %Y")
+
+# Weimin Huang's own invoice template numbers references "#INV-<Type>-<ref>"
+# (e.g. "#INV-Inspection-250930", "#INV-Support-240407") -- a shape that,
+# per real evidence, Shenzhen Minzhi's component invoices don't use (their
+# codes mix letters and digits in the "type" segment itself, e.g.
+# "USR2312-01", which this pattern's letters-only type segment rejects).
+_OVERHEAD_REFERENCE_RE = r"#\s*(?:INV-)?([A-Za-z]+-\s*[\w&]+)"
 
 _WIRE_CONFIRMATION_KEYWORDS = (
     "wire money - confirmation",
@@ -141,6 +161,17 @@ def _guess_doc_type(text: str, default: DocumentType | None) -> DocumentType | N
     return default
 
 
+def _find_overhead_reference(text: str) -> str | None:
+    """Find and normalize a "#[INV-]<Type>-<ref>" style reference, or
+    None if the text doesn't have one. Strips any internal whitespace an
+    OCR pass may have inserted (e.g. "Inspection- 240301" -> "Inspection-240301").
+    """
+    raw = _find_first(text, [_OVERHEAD_REFERENCE_RE])
+    if raw is None:
+        return None
+    return re.sub(r"\s+", "", raw)
+
+
 def extract_from_text(text: str) -> ExtractedInvoice:
     stripped = text.strip()
     if _FILENAME_STUB_RE.match(stripped):
@@ -157,13 +188,21 @@ def extract_from_text(text: str) -> ExtractedInvoice:
     if "shenzhen linkhub" in lowered or "fbabee" in lowered:
         return _extract_freight(text)
 
-    if ("weimin huang" in lowered or "whymon huang" in lowered) and "inspection" in lowered:
-        return _extract_overhead(text)
+    # Components-vendor company names take priority over a personal-name
+    # match below -- a components wire/invoice can still mention Weimin
+    # Huang by name (he's the one being paid) without being his own
+    # service invoice.
+    if "shenzhen minzhi" in lowered or "byj trading" in lowered:
+        return _extract_components(text)
 
-    if any(
-        keyword in lowered
-        for keyword in ("weimin huang", "whymon", "shenzhen minzhi", "byj trading")
-    ):
+    if "weimin huang" in lowered or "whymon huang" in lowered or "whymon" in lowered:
+        # His own invoice template (any service type) has a
+        # "#[INV-]<Type>-<ref>" reference; a wire confirmation or a
+        # components document that merely mentions him doesn't. Treating
+        # an ambiguous case as components is the safe direction --
+        # components never auto-file, overhead can.
+        if _find_overhead_reference(text) is not None:
+            return _extract_overhead(text)
         return _extract_components(text)
 
     return ExtractedInvoice(issues=("could not identify a known vendor in the document text",))
@@ -204,16 +243,21 @@ def _extract_freight(text: str) -> ExtractedInvoice:
 def _extract_overhead(text: str) -> ExtractedInvoice:
     issues: list[str] = []
 
-    # The source text reads "#INV-Inspection-250930", but the "INV-" is
-    # redundant in the filename (the doc-type suffix already says
-    # INV-paid/pconf/etc.) -- captured group excludes it, per 2026-09-08.
-    invoice_number = _find_first(
-        text, [r"#\s*(?:INV-)?(Inspection-[\w&]+)"]
-    )
+    # The source text reads "#INV-Inspection-250930" or "#INV-Support-240407",
+    # but the "INV-" is redundant in the filename (the doc-type suffix
+    # already says INV-paid/pconf/etc.) -- normalized to drop it, per
+    # 2026-09-08, and to strip any OCR-inserted whitespace, per 2026-09-09.
+    invoice_number = _find_overhead_reference(text)
     if invoice_number is None:
-        issues.append("could not find a '#[INV-]Inspection-...' reference")
+        issues.append("could not find a '#[INV-]<Type>-<ref>' reference (e.g. Inspection, Support)")
 
-    doc_date = _find_date(text, [r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})"])
+    doc_date = _find_date(
+        text,
+        [
+            r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})",
+            r"Invoice Date:\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
+        ],
+    )
     if doc_date is None:
         issues.append("could not find an invoice date")
 
@@ -250,6 +294,7 @@ def _extract_components(text: str) -> ExtractedInvoice:
         text,
         [
             r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})",
+            r"Invoice Date:\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
             r"You (?:successfully )?submitted your wire on\s+(\d{1,2}/\d{1,2}/\d{4})",
         ],
     )

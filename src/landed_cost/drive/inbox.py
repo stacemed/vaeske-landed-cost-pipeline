@@ -23,10 +23,16 @@ from ..models.enums import Category
 from .client import DriveClient, DriveFile
 from .extract import ExtractedInvoice, extract_from_text, propose_filename
 from .ingest import DEFAULT_CATEGORY_FOLDER_NAMES, find_child_folder
-from .pdf_text import extract_text_from_pdf_bytes
+from .pdf_text import extract_text_with_ocr_fallback
 
 DEFAULT_INBOX_FOLDER_NAME = "Inbox"
 DEFAULT_NEEDS_REVIEW_FOLDER_NAME = "Needs Review"
+
+_OCR_CAUTION = (
+    "text was read via OCR, not a real text layer (this PDF is a scan or "
+    "photo) -- OCR misreads characters, so confirm every field by hand "
+    "before filing even though it looks complete"
+)
 
 
 class InboxProposal(BaseModel):
@@ -37,27 +43,38 @@ class InboxProposal(BaseModel):
     extracted: ExtractedInvoice
     proposed_name: str
     ready_to_file: bool
+    via_ocr: bool = False
 
 
 def _extension_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1] if "." in filename else "pdf"
 
 
-def propose_from_text(file: DriveFile, text: str) -> InboxProposal:
+def propose_from_text(file: DriveFile, text: str, via_ocr: bool = False) -> InboxProposal:
     """Build a proposal from a file's already-extracted text.
 
     Split out from ``propose_inbox_actions`` so the guessing logic is
-    testable without a real PDF or the optional ``pypdf`` dependency.
+    testable without a real PDF or the optional OCR/pypdf dependencies.
+
+    ``via_ocr`` marks text that came from OCR rather than a genuine text
+    layer -- OCR misreads characters (confirmed on real files: "Bundle"
+    read back as "Bunlde", a stray space inserted inside a reference
+    number), so a document read this way never comes back
+    ``ready_to_file``, no matter how complete the guess looks; the
+    ``_OCR_CAUTION`` issue is added even when every field extracted
+    cleanly.
     """
     if not text.strip():
-        extracted = ExtractedInvoice(
-            issues=(
-                "could not extract any text from this PDF (scanned image "
-                "with no text layer?)",
-            )
+        reason = (
+            "could not extract any text from this PDF, even via OCR fallback"
+            if via_ocr
+            else "could not extract any text from this PDF's text layer"
         )
+        extracted = ExtractedInvoice(issues=(reason,))
     else:
         extracted = extract_from_text(text)
+        if via_ocr and not extracted.issues:
+            extracted = extracted.model_copy(update={"issues": (_OCR_CAUTION,)})
 
     proposed_name = propose_filename(extracted, _extension_of(file.name))
 
@@ -67,25 +84,28 @@ def propose_from_text(file: DriveFile, text: str) -> InboxProposal:
         extracted=extracted,
         proposed_name=proposed_name,
         ready_to_file=extracted.is_ready_to_file,
+        via_ocr=via_ocr,
     )
 
 
 def propose_inbox_actions(
     client: DriveClient,
     inbox_folder_id: str,
-    text_extractor: Callable[[bytes], str] = extract_text_from_pdf_bytes,
+    text_extractor: Callable[[bytes], tuple[str, bool]] = extract_text_with_ocr_fallback,
 ) -> list[InboxProposal]:
     """Propose an action for every file currently in the Inbox folder.
 
     Read-only: downloads and reads each file but never renames or moves
-    anything -- that's ``apply_inbox_actions``.
+    anything -- that's ``apply_inbox_actions``. The default extractor
+    tries the PDF's real text layer first and only falls back to OCR
+    (slower, needs the optional OCR extras) when that comes back empty.
     """
     proposals: list[InboxProposal] = []
     for child in client.list_children(inbox_folder_id):
         if child.is_folder:
             continue
-        text = text_extractor(client.download_file(child.id))
-        proposals.append(propose_from_text(child, text))
+        text, used_ocr = text_extractor(client.download_file(child.id))
+        proposals.append(propose_from_text(child, text, via_ocr=used_ocr))
     return proposals
 
 
