@@ -138,17 +138,30 @@ def _find_first(text: str, patterns: list[str]) -> str | None:
     return None
 
 
+def _normalize_date_token(token: str) -> str:
+    """Undo two OCR artifacts seen on real invoices: the separator
+    between a leading day number and month abbreviation sometimes
+    renders as a space or vanishes entirely ("11 Jan-24", "2Jan-24"
+    instead of "11-Jan-24"). A no-op on anything that doesn't start with
+    digits immediately followed by letters, so month-first formats
+    ("Jan 6, 2024") are untouched.
+    """
+    compact = token.replace(" ", "")
+    return re.sub(r"^(\d{1,2})(?=[A-Za-z])", r"\1-", compact)
+
+
 def _find_date(text: str, patterns: list[str]) -> date_cls | None:
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if not match:
             continue
-        token = match.group(1)
-        for fmt in _DATE_FORMATS:
-            try:
-                return datetime.strptime(token, fmt).date()
-            except ValueError:
-                continue
+        raw = match.group(1)
+        for token in (raw, _normalize_date_token(raw)):
+            for fmt in _DATE_FORMATS:
+                try:
+                    return datetime.strptime(token, fmt).date()
+                except ValueError:
+                    continue
     return None
 
 
@@ -185,13 +198,13 @@ def extract_from_text(text: str) -> ExtractedInvoice:
 
     lowered = stripped.lower()
 
-    if "shenzhen linkhub" in lowered or "fbabee" in lowered:
-        return _extract_freight(text)
-
-    # Components-vendor company names take priority over a personal-name
-    # match below -- a components wire/invoice can still mention Weimin
-    # Huang by name (he's the one being paid) without being his own
-    # service invoice.
+    # Weimin/company-specific signals are checked first, before the
+    # freight signals below -- they're the more specific match, and a
+    # document about something else can still mention "FBAbee" in
+    # passing (e.g. an overhead invoice's line item reads "racks quality
+    # check before FBAbee's bundling"; a components invoice reads
+    # "delivery to FBABee warehouse"). Checking freight first mis-routed
+    # both of those real files (2026-09-09).
     if "shenzhen minzhi" in lowered or "byj trading" in lowered:
         return _extract_components(text)
 
@@ -204,6 +217,12 @@ def extract_from_text(text: str) -> ExtractedInvoice:
         if _find_overhead_reference(text) is not None:
             return _extract_overhead(text)
         return _extract_components(text)
+
+    # "to fbabee" (the wire recipient line), not bare "fbabee" -- the
+    # word alone shows up incidentally in other vendors' documents too
+    # (see the routing comment above).
+    if "shenzhen linkhub" in lowered or "to fbabee" in lowered:
+        return _extract_freight(text)
 
     return ExtractedInvoice(issues=("could not identify a known vendor in the document text",))
 
@@ -254,8 +273,8 @@ def _extract_overhead(text: str) -> ExtractedInvoice:
     doc_date = _find_date(
         text,
         [
-            r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})",
-            r"Invoice Date:\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
+            r"Invoice Date[:.]?\s*(\d{1,2}\s*-?\s*[A-Za-z]{3,9}\s*-\s*\d{2,4})",
+            r"Invoice Date[:.]?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
         ],
     )
     if doc_date is None:
@@ -293,8 +312,8 @@ def _extract_components(text: str) -> ExtractedInvoice:
     doc_date = _find_date(
         text,
         [
-            r"Invoice Date:\s*(\d{1,2}-[A-Za-z]{3}-\d{2,4})",
-            r"Invoice Date:\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
+            r"Invoice Date[:.]?\s*(\d{1,2}\s*-?\s*[A-Za-z]{3,9}\s*-\s*\d{2,4})",
+            r"Invoice Date[:.]?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
             r"You (?:successfully )?submitted your wire on\s+(\d{1,2}/\d{1,2}/\d{4})",
         ],
     )

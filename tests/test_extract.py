@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from landed_cost.models import Category, DocumentType
 from landed_cost.drive.extract import extract_from_text, propose_filename
 from landed_cost.models import SourceDocument
@@ -427,3 +429,57 @@ def test_weimin_mention_without_overhead_reference_falls_back_to_components():
         "MESSAGE TO RECIPIENT'S BANK\n\nINV USQ4RR12C26C"
     )
     assert extracted.category is Category.COMPONENTS
+
+
+# Real bug (2026-09-09): checking freight signals before Weimin/company
+# signals mis-routed two real overhead/components invoices, because both
+# mention "FBAbee" only in passing, not as a freight wire recipient.
+
+OVERHEAD_MENTIONS_FBABEE_IN_PASSING_TEXT = """
+From: Whymon Huang (WEIMIN HUANG)
+
+Inspection Invoice
+
+#INV-Inspection-240102
+
+Invoice Date: 2-Jan-24
+
+P/S: racks quality check before FBAbee's bundling
+"""
+
+COMPONENTS_MENTIONS_FBABEE_IN_PASSING_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+INVOICE No.: #INV-USPKG-2401R
+Invoice Date: Jan 6, 2024
+
+Remarks:
+*Cost Included local delivery to FBABee warehouse
+"""
+
+
+def test_overhead_still_wins_over_incidental_fbabee_mention():
+    extracted = extract_from_text(OVERHEAD_MENTIONS_FBABEE_IN_PASSING_TEXT)
+    assert extracted.category is Category.OVERHEAD
+
+
+def test_components_still_wins_over_incidental_fbabee_mention():
+    extracted = extract_from_text(COMPONENTS_MENTIONS_FBABEE_IN_PASSING_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-USPKG-2401R"
+    # Real bug: OCR read "Invoice Date." with a period, not a colon.
+    assert extracted.doc_date == date(2024, 1, 6)
+
+
+@pytest.mark.parametrize(
+    "raw_date,expected",
+    [
+        ("2-Jan-24", date(2024, 1, 2)),  # well-formed baseline
+        ("2Jan-24", date(2024, 1, 2)),  # OCR dropped the separator
+        ("11 Jan-24", date(2024, 1, 11)),  # OCR rendered it as a space
+    ],
+)
+def test_overhead_date_survives_ocr_separator_variants(raw_date, expected):
+    text = f"From: Whymon Huang (WEIMIN HUANG) Inspection Invoice\n\n#INV-Inspection-1\n\nInvoice Date: {raw_date}\n"
+    extracted = extract_from_text(text)
+    assert extracted.doc_date == expected
