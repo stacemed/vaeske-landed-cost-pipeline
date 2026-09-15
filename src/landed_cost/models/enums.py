@@ -28,7 +28,7 @@ class DocumentType(str, Enum):
 
     Components tracks payment status per installment instead, since a
     single order is routinely split into a deposit and one or more
-    balance payments: ``INV-dep`` / ``INV-bal`` / ``INV-paid-full`` for
+    balance payments: ``INV-dep`` / ``INV-bal`` / ``INV-full`` for
     the invoice itself, ``pconf-dep`` / ``pconf-bal`` / ``pconf-full``
     for its payment confirmation, and ``INV-unpaid`` for an invoice known
     to be outstanding (never guessed automatically -- the invoice
@@ -37,12 +37,15 @@ class DocumentType(str, Enum):
     can). A second or later balance payment against the same order gets
     a number appended directly (no separating hyphen): ``INV-bal2``,
     ``pconf-bal3`` -- the first balance stays unnumbered. Confirmed
-    against the real convention 2026-09-15.
+    against the real convention 2026-09-15; ``FULL_INVOICE`` corrected
+    from ``INV-paid-full`` to ``INV-full`` 2026-09-15 after the business
+    owner used "INV-full" consistently while manually confirming real
+    files -- the payment-confirmation counterpart stays ``pconf-full``.
     """
 
     DEPOSIT_INVOICE = "INV-dep"
     BALANCE_INVOICE = "INV-bal"
-    FULL_INVOICE = "INV-paid-full"
+    FULL_INVOICE = "INV-full"
     UNPAID_INVOICE = "INV-unpaid"
     PAID_INVOICE = "INV-paid"
     REFUND_INVOICE = "INV-refund"

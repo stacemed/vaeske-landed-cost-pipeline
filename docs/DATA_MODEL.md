@@ -82,7 +82,7 @@ collapse into. Overhead / Freight-Bundling use a simple paid-or-not split:
 one order routinely splits into a deposit and one or more balance
 payments: `DEPOSIT_INVOICE` (`INV-dep`) / `BALANCE_INVOICE` (`INV-bal`,
 `INV-bal2`, `INV-bal3`... — no number on the first) / `FULL_INVOICE`
-(`INV-paid-full`, a single undivided payment) / `UNPAID_INVOICE`
+(`INV-full`, a single undivided payment) / `UNPAID_INVOICE`
 (`INV-unpaid`, always assigned by hand — an invoice document alone can't
 prove it wasn't paid) for the invoice itself, and the matching
 `PAYMENT_CONFIRMATION_DEPOSIT` / `_BALANCE` / `_FULL` (`pconf-dep` /

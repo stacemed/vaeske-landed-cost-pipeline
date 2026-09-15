@@ -42,12 +42,12 @@ from .enums import DocumentType
 # Ordered longest-prefix-first isn't actually required by the matching
 # rule below (a prefix only matches on an exact token or one immediately
 # followed by a digit, e.g. "inv-bal" + "2" -- never on a hyphenated
-# continuation like "inv-paid" swallowing "inv-paid-full"), but keeping
-# related entries grouped keeps this list readable.
+# continuation), but keeping related entries grouped keeps this list
+# readable.
 _DOC_TYPE_PREFIXES = (
     ("inv-dep", DocumentType.DEPOSIT_INVOICE),
     ("inv-bal", DocumentType.BALANCE_INVOICE),
-    ("inv-paid-full", DocumentType.FULL_INVOICE),
+    ("inv-full", DocumentType.FULL_INVOICE),
     ("inv-unpaid", DocumentType.UNPAID_INVOICE),
     ("inv-paid", DocumentType.PAID_INVOICE),
     ("inv-refund", DocumentType.REFUND_INVOICE),

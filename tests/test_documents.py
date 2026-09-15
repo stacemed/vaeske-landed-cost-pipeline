@@ -104,7 +104,7 @@ def test_numbered_balance_invoice_suffixes_classify(suffix):
 @pytest.mark.parametrize(
     "suffix,expected",
     [
-        ("INV-paid-full", DocumentType.FULL_INVOICE),
+        ("INV-full", DocumentType.FULL_INVOICE),
         ("INV-unpaid", DocumentType.UNPAID_INVOICE),
         ("pconf-dep", DocumentType.PAYMENT_CONFIRMATION_DEPOSIT),
         ("pconf-full", DocumentType.PAYMENT_CONFIRMATION_FULL),
@@ -119,12 +119,12 @@ def test_components_specific_doc_types_classify(suffix, expected):
     assert doc.doc_type_raw == suffix
 
 
-def test_inv_paid_full_is_distinct_from_plain_inv_paid():
-    # "INV-paid-full" must not be swallowed by the "INV-paid" prefix --
-    # they're different DocumentType values with different meaning for
-    # Components (a single, undivided payment vs. Overhead/Freight's
-    # blanket paid assumption).
-    full = SourceDocument.from_filename("2025-11-07_WHSM_Comp_INV-26Q1RCS_INV-paid-full.pdf")
+def test_inv_full_is_distinct_from_plain_inv_paid():
+    # "INV-full" must not be swallowed by the "INV-paid" prefix -- they're
+    # different DocumentType values with different meaning for Components
+    # (a single, undivided payment vs. Overhead/Freight's blanket paid
+    # assumption).
+    full = SourceDocument.from_filename("2025-11-07_WHSM_Comp_INV-26Q1RCS_INV-full.pdf")
     paid = SourceDocument.from_filename("2025-11-07_WHSM_Comp_INV-26Q1RCS_INV-paid.pdf")
     assert full.doc_type is DocumentType.FULL_INVOICE
     assert paid.doc_type is DocumentType.PAID_INVOICE
