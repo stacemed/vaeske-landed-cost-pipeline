@@ -84,6 +84,22 @@ wasn't obviously a refund or a wire confirmation. Two changes:
   paragraph -- since the *installment number* on a balance (is this the
   first balance payment against this order, or the second?) genuinely
   can't be determined from one document in isolation.
+
+2026-09-15: found (via the business owner manually reading 6 real
+files that all landed in Review) that Weimin Huang's own *payment
+confirmations* -- Wise "Transfer confirmation" documents -- almost
+never carry the structured "#INV-Inspection-######" reference his
+invoices do; just a free-text "Reference inspection 241027"-style memo
+line, word order and spacing both varying. Routing required that
+structured reference to treat a Whymon-mentioning document as
+Overhead, so all 6 fell through to the Components fallback instead.
+``_find_overhead_service_reference`` covers this specific real gap
+(the word "inspection" plus a nearby date-code); confirmed against all
+6 files, each producing the exact date/invoice-number/category the
+business owner had already determined by hand. Scoped to "inspection"
+only -- the other Overhead service types (Monthly retainer, Annual
+bonus, Uncategorized transfer) don't have a confirmed real example of
+this same gap yet.
 """
 
 from __future__ import annotations
@@ -96,7 +112,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ..models.enums import Category, DocumentType
 
-_DATE_FORMATS = ("%d-%b-%Y", "%d-%b-%y", "%m/%d/%Y", "%Y-%m-%d", "%b %d, %Y")
+_DATE_FORMATS = ("%d-%b-%Y", "%d-%b-%y", "%m/%d/%Y", "%Y-%m-%d", "%b %d, %Y", "%B %d, %Y")
 
 # Weimin Huang's own invoice template numbers references "#INV-<Type>-<ref>"
 # (e.g. "#INV-Inspection-250930", "#INV-Support-240407") -- a shape that,
@@ -333,6 +349,28 @@ def _find_overhead_reference(text: str) -> str | None:
     return re.sub(r"\s+", "", raw)
 
 
+def _find_overhead_service_reference(text: str) -> str | None:
+    """A looser fallback for Weimin Huang's own *payment confirmations*,
+    which routinely don't carry the structured "#INV-Type-ref" reference
+    at all -- confirmed on 6 real files (2026-09-15) misrouted to
+    Components as a result, all Wise "Transfer confirmation" documents
+    whose only reference is a free-text memo line: "Reference Inspection
+    241027", "Reference inspection invoice 240112", "Reference rack
+    inspection 240102" (word order and spacing both vary). Every one of
+    those still has the word "inspection" with a trailing date-code
+    nearby, which is what this looks for -- normalized to match the
+    structured form ("Inspection-241027") so it reads the same in a
+    filename either way. Only "inspection" is covered; the other
+    Overhead service types (Monthly retainer, Annual bonus, Uncategorized
+    transfer) don't have a confirmed real example of this gap yet, so
+    guessing at those would be just that -- a guess.
+    """
+    match = re.search(r"inspection\D{0,20}?(\d{5,8})", text, re.IGNORECASE)
+    if match is None:
+        return None
+    return f"Inspection-{match.group(1)}"
+
+
 def extract_from_text(text: str) -> ExtractedInvoice:
     stripped = text.strip()
     if _FILENAME_STUB_RE.match(stripped):
@@ -361,11 +399,16 @@ def extract_from_text(text: str) -> ExtractedInvoice:
 
     if "weimin huang" in lowered or "whymon huang" in lowered or "whymon" in lowered:
         # His own invoice template (any service type) has a
-        # "#[INV-]<Type>-<ref>" reference; a wire confirmation or a
-        # components document that merely mentions him doesn't. Treating
-        # an ambiguous case as components is the safe direction --
-        # components never auto-file, overhead can.
-        if _find_overhead_reference(text) is not None:
+        # "#[INV-]<Type>-<ref>" reference; his *payment confirmations*
+        # routinely don't -- just a free-text "Reference inspection
+        # 241027" memo line instead, which _find_overhead_service_reference
+        # covers (real bug, 2026-09-15: 6 real Inspection payment
+        # confirmations fell through to Components before this, since
+        # the safe-direction fallback below can't tell a real components
+        # wire apart from an overhead one with no structured reference at
+        # all). A components document that merely mentions him in passing
+        # has neither.
+        if _find_overhead_reference(text) is not None or _find_overhead_service_reference(text) is not None:
             return _extract_overhead(text)
         return _extract_components(text, vendor_abbrev="WHSM")
 
@@ -417,7 +460,10 @@ def _extract_overhead(text: str) -> ExtractedInvoice:
     # but the "INV-" is redundant in the filename (the doc-type suffix
     # already says INV-paid/pconf/etc.) -- normalized to drop it, per
     # 2026-09-08, and to strip any OCR-inserted whitespace, per 2026-09-09.
-    invoice_number = _find_overhead_reference(text)
+    # His payment confirmations don't carry that structured reference at
+    # all -- _find_overhead_service_reference's looser "Reference
+    # inspection ######" fallback covers those (2026-09-15).
+    invoice_number = _find_overhead_reference(text) or _find_overhead_service_reference(text)
     if invoice_number is None:
         issues.append("could not find a '#[INV-]<Type>-<ref>' reference (e.g. Inspection, Support)")
 
@@ -426,6 +472,10 @@ def _extract_overhead(text: str) -> ExtractedInvoice:
         [
             r"Invoice Date[:.]?\s*(\d{1,2}\s*-?\s*[A-Za-z]{3,9}\s*-\s*\d{2,4})",
             r"Invoice Date[:.]?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})",
+            # His Wise payment confirmations carry no "Invoice Date" at
+            # all -- only "Transfer created <full month> <day>, <year>",
+            # confirmed on the same 6 real files.
+            r"Transfer created\s+([A-Za-z]+\s+\d{1,2},\s*\d{4})",
         ],
     )
     if doc_date is None:

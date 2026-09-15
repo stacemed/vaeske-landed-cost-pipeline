@@ -644,3 +644,72 @@ def test_components_payment_confirmation_gets_balance_variant():
     )
     extracted = extract_from_text(text)
     assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_BALANCE
+
+
+# --- Overhead payment confirmations without a structured reference (2026-09-15) ---
+# Real bug: Weimin Huang's Wise "Transfer confirmation" payment
+# confirmations never carry the "#INV-Inspection-######" reference his
+# own invoices do -- just a free-text "Reference ..." memo line. Word
+# order and spacing both vary across real files. All 6 fixtures below
+# are trimmed from real files; the business owner independently
+# confirmed the same date/invoice-number/category for every one.
+
+OVERHEAD_PCONF_TEXT = """
+Transfer Invoice
+
+Transfer confirmation
+
+Transfer created January 03, 2024 00:23:10 GMT-05:00
+
+Transfer #920290376
+
+Total to WEIMIN HUANG 200.00 USD
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference rack inspection 240102
+"""
+
+OVERHEAD_PCONF_STRUCTURED_REFERENCE_TEXT = """
+Transfer Invoice
+
+Transfer confirmation
+
+Transfer created October 09, 2024 16:48:54 GMT-04:00
+
+Total to WEIMIN HUANG 168.00 USD
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference INV-Inspection-241009
+"""
+
+
+def test_overhead_payment_confirmation_without_structured_reference_still_routes_to_overhead():
+    extracted = extract_from_text(OVERHEAD_PCONF_TEXT)
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.invoice_number == "Inspection-240102"
+    assert extracted.doc_date == date(2024, 1, 3)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.is_ready_to_file is True
+
+
+def test_overhead_payment_confirmation_with_inv_prefixed_reference():
+    # "Reference INV-Inspection-241009" -- closer to the structured form
+    # but still missing the leading "#" _find_overhead_reference requires.
+    extracted = extract_from_text(OVERHEAD_PCONF_STRUCTURED_REFERENCE_TEXT)
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.invoice_number == "Inspection-241009"
+    assert extracted.doc_date == date(2024, 10, 9)
+
+
+def test_components_wire_confirmation_without_inspection_word_stays_components():
+    # The service-reference fallback is scoped to "inspection" -- a real
+    # components wire confirmation (no such word) must not be flipped.
+    extracted = extract_from_text(COMPONENTS_WHYMON_FEDWIRE_TEXT)
+    assert extracted.category is Category.COMPONENTS
