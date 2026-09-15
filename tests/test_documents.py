@@ -78,16 +78,56 @@ def test_unrecognized_doc_type_falls_back_to_other():
 
 @pytest.mark.parametrize(
     "suffix",
-    ["pconf-bal1", "pconf-bal2", "pconf-bal3", "pconf-bal4"],
+    ["pconf-bal", "pconf-bal2", "pconf-bal3", "pconf-bal4"],
 )
 def test_numbered_payment_confirmation_suffixes_still_classify(suffix):
-    # Real Drive files: a multi-payment invoice gets pconf-bal1..bal4, one
-    # per partial payment.
+    # Real convention (2026-09-15): a multi-payment invoice gets
+    # pconf-bal for the first balance, pconf-bal2..bal4 for later ones
+    # against the same order -- no number on the first.
     doc = SourceDocument.from_filename(
         f"2025-11-07_WHSM_Comp_INV-26Q1RCS_{suffix}.pdf"
     )
-    assert doc.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert doc.doc_type is DocumentType.PAYMENT_CONFIRMATION_BALANCE
     assert doc.doc_type_raw == suffix
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["INV-bal", "INV-bal2", "INV-bal3"],
+)
+def test_numbered_balance_invoice_suffixes_classify(suffix):
+    doc = SourceDocument.from_filename(f"2025-11-07_WHSM_Comp_INV-26Q1RCS_{suffix}.pdf")
+    assert doc.doc_type is DocumentType.BALANCE_INVOICE
+    assert doc.doc_type_raw == suffix
+
+
+@pytest.mark.parametrize(
+    "suffix,expected",
+    [
+        ("INV-paid-full", DocumentType.FULL_INVOICE),
+        ("INV-unpaid", DocumentType.UNPAID_INVOICE),
+        ("pconf-dep", DocumentType.PAYMENT_CONFIRMATION_DEPOSIT),
+        ("pconf-full", DocumentType.PAYMENT_CONFIRMATION_FULL),
+    ],
+)
+def test_components_specific_doc_types_classify(suffix, expected):
+    # These only apply to Components -- Overhead/Freight-Bundling never
+    # use them, but the parser must still recognize a real Components
+    # filename using them.
+    doc = SourceDocument.from_filename(f"2025-11-07_WHSM_Comp_INV-26Q1RCS_{suffix}.pdf")
+    assert doc.doc_type is expected
+    assert doc.doc_type_raw == suffix
+
+
+def test_inv_paid_full_is_distinct_from_plain_inv_paid():
+    # "INV-paid-full" must not be swallowed by the "INV-paid" prefix --
+    # they're different DocumentType values with different meaning for
+    # Components (a single, undivided payment vs. Overhead/Freight's
+    # blanket paid assumption).
+    full = SourceDocument.from_filename("2025-11-07_WHSM_Comp_INV-26Q1RCS_INV-paid-full.pdf")
+    paid = SourceDocument.from_filename("2025-11-07_WHSM_Comp_INV-26Q1RCS_INV-paid.pdf")
+    assert full.doc_type is DocumentType.FULL_INVOICE
+    assert paid.doc_type is DocumentType.PAID_INVOICE
 
 
 def test_overhead_category_tag_from_real_filename():

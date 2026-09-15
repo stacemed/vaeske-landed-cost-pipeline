@@ -69,12 +69,24 @@ Parses the Drive filename convention visible throughout the workbook, e.g.:
 2025-06-11_FBSL_Frei-Bund_JG20250612E-Refurn_INV-refund.pdf
 ```
 
-Fields: `doc_date`, `vendor_abbrev` (e.g. `WHSM`, `FBSL` — see
+Fields: `doc_date`, `vendor_abbrev` (e.g. `WHSM`, `SBIC`, `FBSL` — see
 `VendorReference`), `category_tag` (free text as written, e.g. `comp`,
 `Comp`, `Frei-Bund` — casing is inconsistent in practice, so comparisons are
-case-insensitive), `invoice_number`, `doc_type`
-(`DocumentType.DEPOSIT_INVOICE` / `PAID_INVOICE` / `REFUND_INVOICE` /
-`PAYMENT_CONFIRMATION` / `OTHER`), and `extension`.
+case-insensitive), `invoice_number`, `doc_type`, and `extension`.
+
+`doc_type` is a coarse classification of the exact suffix token
+(`doc_type_raw`), which is what the numbered balance suffixes below
+collapse into. Overhead / Freight-Bundling use a simple paid-or-not split:
+`DocumentType.PAID_INVOICE` / `REFUND_INVOICE` / `PAYMENT_CONFIRMATION` /
+`OTHER`. Components tracks payment status per installment instead, since
+one order routinely splits into a deposit and one or more balance
+payments: `DEPOSIT_INVOICE` (`INV-dep`) / `BALANCE_INVOICE` (`INV-bal`,
+`INV-bal2`, `INV-bal3`... — no number on the first) / `FULL_INVOICE`
+(`INV-paid-full`, a single undivided payment) / `UNPAID_INVOICE`
+(`INV-unpaid`, always assigned by hand — an invoice document alone can't
+prove it wasn't paid) for the invoice itself, and the matching
+`PAYMENT_CONFIRMATION_DEPOSIT` / `_BALANCE` / `_FULL` (`pconf-dep` /
+`pconf-bal[N]` / `pconf-full`) for its payment confirmation.
 
 This is the join key between a file sitting in Google Drive and a row in
 `1 TRANSACTIONS` / `2 FREIGHT` / `3 COMPONENTS` (the "Deposit invoice" /
@@ -150,7 +162,7 @@ Master/reference data that the cost sheets look up against, from
 
 - `ComponentReference` — canonical component names (e.g. `Rack`,
   `26 QT Inner Box`).
-- `VendorReference` — vendor name, abbreviation (`FBSL`, `WHSM`, `WH`) used
+- `VendorReference` — vendor name, abbreviation (`FBSL`, `WHSM`, `SBIC`, `WH`) used
   in filenames, and which components/categories they supply.
 - `SKU` — SKU code, market(s) it ships to, `components_per_unit` (used for
   overhead allocation), `cbm_per_unit` (fallback freight rate basis when a

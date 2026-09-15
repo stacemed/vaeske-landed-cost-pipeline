@@ -218,7 +218,7 @@ def test_components_never_ready_to_file_even_with_good_matches():
     assert extracted.vendor_abbrev == "WHSM"
     assert extracted.category is Category.COMPONENTS
     assert extracted.invoice_number == "INV-26Q1RCS"
-    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
     # Always flagged, by design, regardless of how good the guess looks.
     assert extracted.is_ready_to_file is False
     assert any("no consistent format" in issue for issue in extracted.issues)
@@ -274,7 +274,7 @@ def test_whymon_fedwire_wire_confirmation_recognized_as_components():
     assert extracted.category is Category.COMPONENTS
     assert extracted.vendor_abbrev == "WHSM"
     assert extracted.doc_date == date(2024, 12, 16)
-    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
 
 
 def test_wire_confirmation_tolerates_successfully_submitted_phrasing():
@@ -285,7 +285,7 @@ def test_wire_confirmation_tolerates_successfully_submitted_phrasing():
 
     assert extracted.category is Category.COMPONENTS
     assert extracted.doc_date == date(2024, 4, 21)
-    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
 
 
 def test_invoice_number_extraction_skips_non_digit_false_positive():
@@ -529,3 +529,118 @@ def test_components_falls_back_to_remark_memo_with_markdown_escaped_brackets():
     extracted = extract_from_text(text)
     assert extracted.category is Category.COMPONENTS
     assert extracted.invoice_number == "USCLSLV26QT-24May"
+
+
+# --- Components naming convention (2026-09-15): SBIC vendor + deposit/balance/full doc types ---
+
+SBIC_ORDER_TEXT = """
+3/7/24, 10:23 PM Trade Assurance Order Details
+
+Home  My Alibaba  Order Management  Order details
+
+Trade Assurance Order Shanghai Beone Industrial Co., Ltd. Order number: 204243854001026990
+
+Order Payment Dispatch Delivery Review
+
+Initial payment being processed
+
+Mar. 7, 2024, 20:22:36 PST., you have submitted your credit/debit card payment.
+Your payment amount USD 1255.50 is currently being processed.
+"""
+
+COMPONENTS_DEPOSIT_INVOICE_TEXT = """
+INV-JUN24USQ4CRP 24Q4 RACKS,CONTAINERS & PKGS
+
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+30% Down Payment Due (Item 1~5):
+
+$21,253.20
+
+Subject: Q4 Repeat-5KXRacks+3K X12QT & 3K X26QT CTNS/LIDS
+
+Deposit 30% $21,253.20
+
+TTL Balance dued before dispatch $49,590.80
+"""
+
+# Real bug (2026-09-15): this invoice's own header calls the 70% "Down
+# Payment Due", but its Subject line and payment breakdown make clear
+# it's actually the *balance* (this vendor's standard split is 30%
+# deposit / 70% balance) -- trimmed from the real PDF text.
+COMPONENTS_MISLABELED_BALANCE_TEXT = """
+INV-24Q4SLV 24Q4 SLEEVES
+
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+70% Down Payment Due:
+
+$9,332.40
+
+Subject: Q4-2K X12QT Sleeve & 2K X26QT Sleeve Balance Payment
+
+Deposit 30% $3,999.60
+
+Balance dued before dispatch $9,332.40
+"""
+
+COMPONENTS_NO_SPLIT_LANGUAGE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+INV-US3rdR24-01
+
+Subject: No.3 Racks-1st order-1,000 Racks
+
+Item & Description Qty Rate Amount
+1 Rack Set 1000 $4.95 $4,950.00
+"""
+
+
+def test_sbic_vendor_recognized_as_components():
+    extracted = extract_from_text(SBIC_ORDER_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.vendor_abbrev == "SBIC"
+
+
+def test_components_deposit_invoice_detected():
+    extracted = extract_from_text(COMPONENTS_DEPOSIT_INVOICE_TEXT)
+    assert extracted.doc_type is DocumentType.DEPOSIT_INVOICE
+
+
+def test_components_percentage_overrides_misleading_down_payment_label():
+    # The vendor's own header says "Down Payment" but the invoice is
+    # actually asking for the 70% balance -- the percentage wins.
+    extracted = extract_from_text(COMPONENTS_MISLABELED_BALANCE_TEXT)
+    assert extracted.doc_type is DocumentType.BALANCE_INVOICE
+    assert any("bal2/bal3" in issue for issue in extracted.issues)
+
+
+def test_components_no_split_language_defaults_to_full_invoice():
+    extracted = extract_from_text(COMPONENTS_NO_SPLIT_LANGUAGE_TEXT)
+    assert extracted.doc_type is DocumentType.FULL_INVOICE
+
+
+def test_components_refund_keyword_wins_over_payment_stage():
+    text = COMPONENTS_DEPOSIT_INVOICE_TEXT + "\nThis order was over payment and will be refunded.\n"
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.REFUND_INVOICE
+
+
+def test_components_payment_confirmation_gets_deposit_variant():
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n"
+        "Transfer confirmation\n"
+        "Reference INV-26Q1RCS 30% deposit payment\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_DEPOSIT
+
+
+def test_components_payment_confirmation_gets_balance_variant():
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n"
+        "Transfer confirmation\n"
+        "Reference INV-26Q1RCS balance payment\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_BALANCE

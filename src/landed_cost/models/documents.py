@@ -20,11 +20,14 @@ raise ``ValueError`` rather than guess if a filename doesn't split into
 exactly five underscore-delimited parts, so a non-conforming filename gets
 flagged for a human instead of silently mis-parsed.
 
-The doc-type token isn't always an exact match: a multi-payment invoice
-carries a numbered suffix, e.g. ``pconf-bal1`` .. ``pconf-bal4`` for four
-partial payment confirmations against one invoice. ``doc_type`` classifies
-by prefix (so all four are still ``PAYMENT_CONFIRMATION``); ``doc_type_raw``
-keeps the exact token so the distinction isn't lost.
+The doc-type token isn't always an exact match: a components order with
+more than one balance payment carries a number appended directly (no
+hyphen) starting at the *second* balance -- ``INV-bal``, ``INV-bal2``,
+``INV-bal3`` .. for the invoices themselves, ``pconf-bal``, ``pconf-bal2``
+.. for their payment confirmations (confirmed against the real convention
+2026-09-15). ``doc_type`` classifies by prefix (so every numbered variant
+still maps to ``BALANCE_INVOICE`` / ``PAYMENT_CONFIRMATION_BALANCE``);
+``doc_type_raw`` keeps the exact token so the distinction isn't lost.
 """
 
 from __future__ import annotations
@@ -36,10 +39,21 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from .enums import DocumentType
 
+# Ordered longest-prefix-first isn't actually required by the matching
+# rule below (a prefix only matches on an exact token or one immediately
+# followed by a digit, e.g. "inv-bal" + "2" -- never on a hyphenated
+# continuation like "inv-paid" swallowing "inv-paid-full"), but keeping
+# related entries grouped keeps this list readable.
 _DOC_TYPE_PREFIXES = (
     ("inv-dep", DocumentType.DEPOSIT_INVOICE),
+    ("inv-bal", DocumentType.BALANCE_INVOICE),
+    ("inv-paid-full", DocumentType.FULL_INVOICE),
+    ("inv-unpaid", DocumentType.UNPAID_INVOICE),
     ("inv-paid", DocumentType.PAID_INVOICE),
     ("inv-refund", DocumentType.REFUND_INVOICE),
+    ("pconf-dep", DocumentType.PAYMENT_CONFIRMATION_DEPOSIT),
+    ("pconf-bal", DocumentType.PAYMENT_CONFIRMATION_BALANCE),
+    ("pconf-full", DocumentType.PAYMENT_CONFIRMATION_FULL),
     ("pconf", DocumentType.PAYMENT_CONFIRMATION),
 )
 
@@ -47,7 +61,7 @@ _DOC_TYPE_PREFIXES = (
 def _classify_doc_type(token: str) -> DocumentType:
     lowered = token.lower()
     for prefix, doc_type in _DOC_TYPE_PREFIXES:
-        if lowered == prefix or lowered.startswith(prefix + "-"):
+        if lowered == prefix or (lowered.startswith(prefix) and lowered[len(prefix) :][:1].isdigit()):
             return doc_type
     return DocumentType.OTHER
 

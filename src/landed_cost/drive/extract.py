@@ -59,6 +59,31 @@ case OCR already covered, this only shows up once you check which
 fields, ignoring issues) so a caller can decide it's worth an OCR pass
 on just the fields still missing; see ``propose_from_text``'s
 ``supplemental_text`` in ``inbox.py`` for where that pass happens.
+
+2026-09-15: got the real Components naming convention (vendor
+abbreviations, and how deposit/balance/full-payment invoices and their
+confirmations are told apart) directly from the business owner --
+previously this module just left doc_type at None for anything that
+wasn't obviously a refund or a wire confirmation. Two changes:
+
+- A second Components vendor, Shanghai Beone Industrial Co. (an
+  Alibaba Trade Assurance seller, vendor_abbrev "SBIC"), alongside the
+  existing Shenzhen Minzhi / Weimin Huang ("WHSM"). ``_extract_components``
+  now takes ``vendor_abbrev`` from whichever company matched, rather
+  than hardcoding "WHSM".
+- ``_guess_components_doc_type`` classifies every Components document
+  as a deposit, a balance, or a full (undivided) payment -- never just
+  None -- using the invoice's own language. Confirmed on a real file
+  that this isn't as simple as "which word appears": one invoice read
+  "70% Down Payment Due" for what its own Subject line and payment
+  breakdown make clear is actually the balance, since this vendor's
+  standard split is 30% deposit / 70% balance. A percentage explicitly
+  tied to "due" is trusted over the word sitting next to it for exactly
+  this reason (see ``_guess_payment_stage``). Still never marks a
+  Components document ready to file -- see the module's opening
+  paragraph -- since the *installment number* on a balance (is this the
+  first balance payment against this order, or the second?) genuinely
+  can't be determined from one document in isolation.
 """
 
 from __future__ import annotations
@@ -88,6 +113,25 @@ _WIRE_CONFIRMATION_KEYWORDS = (
     "wise us inc",
 )
 _REFUND_KEYWORDS = ("refund", "over payment", "overpayment")
+
+# Components' second vendor (2026-09-15): orders placed through Alibaba's
+# Trade Assurance flow, company name confirmed on a real order-details page.
+_SBIC_KEYWORD = "shanghai beone"
+
+# A component order is routinely split into a deposit and one or more
+# balance payments; "down payment" and "deposit" are used interchangeably
+# in practice. Real evidence (2026-09-15) also showed the reverse: a
+# document that says "Down Payment Due" isn't always the deposit -- one
+# vendor invoice read "70% Down Payment Due" for what its own Subject
+# line and payment breakdown make clear is actually the *balance*
+# (30% deposit / 70% balance is this vendor's usual split). So a
+# percentage explicitly attached to "due" is trusted over the word next
+# to it: >50% due means balance, <=50% means deposit, regardless of
+# which word the vendor's template happened to use.
+_DEPOSIT_KEYWORDS = ("deposit", "down payment")
+_BALANCE_KEYWORDS = ("balance",)
+_PCT_THEN_DUE_RE = r"(\d{1,3})\s*%\s*(?:down\s*payment|deposit|balance)(?:\s+payment)?\s+due"
+_DUE_THEN_PCT_RE = r"due\s+(\d{1,3})\s*%"
 
 # The entire extracted text is a bare filename -- Drive couldn't read this
 # file's real content (seen with PDFs converted from an embedded .xlsx).
@@ -220,6 +264,64 @@ def _guess_doc_type(text: str, default: DocumentType | None) -> DocumentType | N
     return default
 
 
+def _guess_payment_stage(text: str) -> str | None:
+    """Return ``"deposit"``, ``"balance"``, or None (no split-payment
+    language at all -- a single, undivided invoice).
+
+    A percentage explicitly tied to "due" wins over which word (deposit/
+    down payment/balance) it's attached to -- see the module-level
+    comment on ``_PCT_THEN_DUE_RE`` for the real case this covers. Falls
+    back to simple keyword presence when no such percentage is found;
+    "balance" wins a tie only because by then a resolving percentage has
+    already had its chance -- both keywords present with no percentage
+    at all hasn't been observed on a real file yet.
+    """
+    lowered = text.lower()
+    pct_match = re.search(_PCT_THEN_DUE_RE, lowered) or re.search(_DUE_THEN_PCT_RE, lowered)
+    if pct_match:
+        return "balance" if int(pct_match.group(1)) > 50 else "deposit"
+
+    has_balance = any(keyword in lowered for keyword in _BALANCE_KEYWORDS)
+    has_deposit = any(keyword in lowered for keyword in _DEPOSIT_KEYWORDS)
+    if has_balance:
+        return "balance"
+    if has_deposit:
+        return "deposit"
+    return None
+
+
+def _guess_components_doc_type(text: str, *, is_confirmation: bool) -> DocumentType:
+    """Components tracks payment status per installment, unlike
+    Overhead/Freight's simple paid-or-not -- see the ``DocumentType``
+    docstring. Refund takes priority over payment-stage: a refund is a
+    different kind of document entirely, not a deposit/balance/full
+    invoice. Never returns None -- an invoice or confirmation with no
+    split-payment or refund language at all is a single, undivided
+    payment (``FULL_INVOICE`` / ``PAYMENT_CONFIRMATION_FULL``), per
+    confirmed convention (2026-09-15). Always returns the *unnumbered*
+    form even for a balance -- the automated guess can't know whether
+    this is an order's first balance payment or its second, third...;
+    a human bumps it to ``INV-bal2`` etc. by hand when it isn't the
+    first (see the caution issue this triggers in ``_extract_components``).
+    """
+    lowered = text.lower()
+    if any(keyword in lowered for keyword in _REFUND_KEYWORDS):
+        return DocumentType.REFUND_INVOICE
+
+    stage = _guess_payment_stage(text)
+    if is_confirmation:
+        if stage == "deposit":
+            return DocumentType.PAYMENT_CONFIRMATION_DEPOSIT
+        if stage == "balance":
+            return DocumentType.PAYMENT_CONFIRMATION_BALANCE
+        return DocumentType.PAYMENT_CONFIRMATION_FULL
+    if stage == "deposit":
+        return DocumentType.DEPOSIT_INVOICE
+    if stage == "balance":
+        return DocumentType.BALANCE_INVOICE
+    return DocumentType.FULL_INVOICE
+
+
 def _find_overhead_reference(text: str) -> str | None:
     """Find and normalize a "#[INV-]<Type>-<ref>" style reference, or
     None if the text doesn't have one. Strips any internal whitespace an
@@ -252,7 +354,10 @@ def extract_from_text(text: str) -> ExtractedInvoice:
     # "delivery to FBABee warehouse"). Checking freight first mis-routed
     # both of those real files (2026-09-09).
     if "shenzhen minzhi" in lowered or "byj trading" in lowered:
-        return _extract_components(text)
+        return _extract_components(text, vendor_abbrev="WHSM")
+
+    if _SBIC_KEYWORD in lowered:
+        return _extract_components(text, vendor_abbrev="SBIC")
 
     if "weimin huang" in lowered or "whymon huang" in lowered or "whymon" in lowered:
         # His own invoice template (any service type) has a
@@ -262,7 +367,7 @@ def extract_from_text(text: str) -> ExtractedInvoice:
         # components never auto-file, overhead can.
         if _find_overhead_reference(text) is not None:
             return _extract_overhead(text)
-        return _extract_components(text)
+        return _extract_components(text, vendor_abbrev="WHSM")
 
     # "to fbabee" (the wire recipient line), not bare "fbabee" -- the
     # word alone shows up incidentally in other vendors' documents too
@@ -339,7 +444,7 @@ def _extract_overhead(text: str) -> ExtractedInvoice:
     )
 
 
-def _extract_components(text: str) -> ExtractedInvoice:
+def _extract_components(text: str, *, vendor_abbrev: str) -> ExtractedInvoice:
     lowered = text.lower()
     issues: list[str] = [
         "component invoice numbers follow no consistent format across vendors "
@@ -367,14 +472,21 @@ def _extract_components(text: str) -> ExtractedInvoice:
     if doc_date is None:
         issues.append("could not find an invoice or wire date")
 
-    doc_type = _guess_doc_type(text, default=None)
+    is_confirmation = any(keyword in lowered for keyword in _WIRE_CONFIRMATION_KEYWORDS)
+    doc_type = _guess_components_doc_type(text, is_confirmation=is_confirmation)
+    if doc_type in (DocumentType.BALANCE_INVOICE, DocumentType.PAYMENT_CONFIRMATION_BALANCE):
+        issues.append(
+            "guessed this is a balance payment, but not which installment -- "
+            "bump the doc-type suffix to bal2/bal3/etc. by hand if this isn't "
+            "the first balance against this order"
+        )
 
     matched_components = [name for name in _KNOWN_COMPONENT_NAMES if name in lowered]
     if matched_components:
         issues.append(f"matched known component names: {', '.join(matched_components)}")
 
     return ExtractedInvoice(
-        vendor_abbrev="WHSM",
+        vendor_abbrev=vendor_abbrev,
         category=Category.COMPONENTS,
         category_tag="comp",
         invoice_number=invoice_number,
