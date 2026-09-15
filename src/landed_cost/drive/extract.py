@@ -47,6 +47,18 @@ only after the two body-text patterns come up empty. Drive's own text
 extraction renders those brackets markdown-escaped (a literal backslash
 before each "[" and "]"), so the pattern matches both escaped and plain
 brackets.
+
+2026-09-15: some invoices have their invoice-number/date header
+rendered in a way ``pypdf``'s real text layer just doesn't pick up at
+all (confirmed on a real file: the header is legible in the PDF viewer
+but simply isn't in ``extract_text_from_pdf_bytes``'s output), while
+the rest of the page extracts fine -- unlike the fully-blank-text-layer
+case OCR already covered, this only shows up once you check which
+*fields* came back empty, not whether the text as a whole did.
+``ExtractedInvoice.is_fields_complete`` names that check (all six
+fields, ignoring issues) so a caller can decide it's worth an OCR pass
+on just the fields still missing; see ``propose_from_text``'s
+``supplemental_text`` in ``inbox.py`` for where that pass happens.
 """
 
 from __future__ import annotations
@@ -125,21 +137,32 @@ class ExtractedInvoice(BaseModel):
     issues: tuple[str, ...] = ()
 
     @property
-    def is_ready_to_file(self) -> bool:
-        """True only when every field was found AND nothing was flagged.
+    def is_fields_complete(self) -> bool:
+        """True when every field was found, regardless of any issue flags.
 
-        Components can never satisfy this -- see the module docstring --
-        by design, not by accident.
+        Distinct from ``is_ready_to_file``, which also requires zero
+        issues -- a Components extraction (or one filled in partly via
+        OCR) can have every field populated and still not be safe to
+        auto-file. Used to decide whether it's worth trying harder (e.g.
+        an OCR supplement pass) to fill in what's missing.
         """
         return (
-            not self.issues
-            and self.vendor_abbrev is not None
+            self.vendor_abbrev is not None
             and self.category is not None
             and self.category_tag is not None
             and self.invoice_number is not None
             and self.doc_date is not None
             and self.doc_type is not None
         )
+
+    @property
+    def is_ready_to_file(self) -> bool:
+        """True only when every field was found AND nothing was flagged.
+
+        Components can never satisfy this -- see the module docstring --
+        by design, not by accident.
+        """
+        return not self.issues and self.is_fields_complete
 
 
 def _find_first(text: str, patterns: list[str]) -> str | None:

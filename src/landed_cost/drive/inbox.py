@@ -11,6 +11,15 @@ Two steps, and neither trusts a guess blindly:
    of proposals -- kept separate from step 1 so a caller (the CLI script,
    a test) can inspect or dry-run proposals before anything touches
    Drive, per the 2026-09-04 decision that this defaults to a dry run.
+
+2026-09-15: a PDF's real text layer can come back non-empty but still
+be missing a field a human can plainly read on the page (confirmed on
+a real invoice: the whole invoice-number/date header wasn't in
+``extract_text_from_pdf_bytes``'s output, though everything else was).
+``propose_inbox_actions`` now tries a second, targeted OCR pass in that
+case -- see ``propose_from_text``'s ``supplemental_text`` -- distinct
+from the full-page OCR fallback in ``pdf_text.py``, which only ever
+triggers when the text layer is entirely empty.
 """
 
 from __future__ import annotations
@@ -34,6 +43,35 @@ _OCR_CAUTION = (
     "before filing even though it looks complete"
 )
 
+_OCR_SUPPLEMENT_CAUTION = (
+    "some fields came from OCR of the rendered page, not the PDF's real "
+    "text layer, which doesn't include that part of it (seen on invoices "
+    "with a header rendered in a way the text layer just skips) -- OCR "
+    "misreads characters, so confirm every field by hand before filing "
+    "even though it looks complete"
+)
+
+_MERGEABLE_FIELDS = ("invoice_number", "doc_date", "doc_type")
+
+
+def _default_ocr_supplement(data: bytes) -> str:
+    from .ocr import extract_text_via_ocr
+
+    return extract_text_via_ocr(data)
+
+
+def _worth_ocr_supplement(extracted: ExtractedInvoice) -> bool:
+    """True when a vendor was recognized but a field is still missing --
+    worth the cost of an extra OCR pass to see if it's hiding somewhere
+    the real text layer didn't pick up. An unrecognized vendor wouldn't
+    be fixed by this (OCR reads the same document, not a different one).
+    """
+    return extracted.category is not None and not extracted.is_fields_complete
+
+
+def _filled_in_by(before: ExtractedInvoice, after: ExtractedInvoice) -> bool:
+    return any(getattr(before, field) is None and getattr(after, field) is not None for field in _MERGEABLE_FIELDS)
+
 
 class InboxProposal(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -50,7 +88,9 @@ def _extension_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1] if "." in filename else "pdf"
 
 
-def propose_from_text(file: DriveFile, text: str, via_ocr: bool = False) -> InboxProposal:
+def propose_from_text(
+    file: DriveFile, text: str, via_ocr: bool = False, supplemental_text: str = ""
+) -> InboxProposal:
     """Build a proposal from a file's already-extracted text.
 
     Split out from ``propose_inbox_actions`` so the guessing logic is
@@ -63,6 +103,15 @@ def propose_from_text(file: DriveFile, text: str, via_ocr: bool = False) -> Inbo
     ``ready_to_file``, no matter how complete the guess looks; the
     ``_OCR_CAUTION`` issue is added even when every field extracted
     cleanly.
+
+    ``supplemental_text`` is a second pass at the same document (in
+    practice, an OCR reading) tried only when ``text`` alone recognized
+    a vendor but came up short on a field -- some invoices have a
+    header the real text layer just doesn't include, even though the
+    rest of the page extracts fine (confirmed on a real file). It's
+    appended to ``text`` and re-extracted as one; adopted only if that
+    actually fills in something ``text`` alone couldn't, and flagged
+    with ``_OCR_SUPPLEMENT_CAUTION`` when it does, same as full-page OCR.
     """
     if not text.strip():
         reason = (
@@ -75,6 +124,15 @@ def propose_from_text(file: DriveFile, text: str, via_ocr: bool = False) -> Inbo
         extracted = extract_from_text(text)
         if via_ocr and not extracted.issues:
             extracted = extracted.model_copy(update={"issues": (_OCR_CAUTION,)})
+        elif (
+            not via_ocr
+            and supplemental_text.strip()
+            and _worth_ocr_supplement(extracted)
+        ):
+            merged = extract_from_text(f"{text}\n\n{supplemental_text}")
+            if _filled_in_by(extracted, merged):
+                extracted = merged.model_copy(update={"issues": (*merged.issues, _OCR_SUPPLEMENT_CAUTION)})
+                via_ocr = True
 
     proposed_name = propose_filename(extracted, _extension_of(file.name))
 
@@ -92,6 +150,7 @@ def propose_inbox_actions(
     client: DriveClient,
     inbox_folder_id: str,
     text_extractor: Callable[[bytes], tuple[str, bool]] = extract_text_with_ocr_fallback,
+    ocr_supplement_extractor: Callable[[bytes], str] = _default_ocr_supplement,
 ) -> list[InboxProposal]:
     """Propose an action for every file currently in the Inbox folder.
 
@@ -99,13 +158,26 @@ def propose_inbox_actions(
     anything -- that's ``apply_inbox_actions``. The default extractor
     tries the PDF's real text layer first and only falls back to OCR
     (slower, needs the optional OCR extras) when that comes back empty.
+
+    When the text layer wasn't empty but still leaves a recognized
+    vendor's document short a field, a second, targeted OCR pass is
+    tried and merged in via ``propose_from_text``'s ``supplemental_text``
+    -- see there for why a non-empty text layer can still be missing
+    part of the page. Only run when actually worth it, so a file that's
+    already complete (or whose vendor isn't recognized at all) never
+    pays the extra OCR cost.
     """
     proposals: list[InboxProposal] = []
     for child in client.list_children(inbox_folder_id):
         if child.is_folder:
             continue
-        text, used_ocr = text_extractor(client.download_file(child.id))
-        proposals.append(propose_from_text(child, text, via_ocr=used_ocr))
+        raw = client.download_file(child.id)
+        text, used_ocr = text_extractor(raw)
+        proposal = propose_from_text(child, text, via_ocr=used_ocr)
+        if not used_ocr and _worth_ocr_supplement(proposal.extracted):
+            ocr_text = ocr_supplement_extractor(raw)
+            proposal = propose_from_text(child, text, via_ocr=False, supplemental_text=ocr_text)
+        proposals.append(proposal)
     return proposals
 
 

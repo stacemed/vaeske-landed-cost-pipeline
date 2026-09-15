@@ -13,6 +13,21 @@ from test_extract import FREIGHT_INVOICE_TEXT, UNKNOWN_TEXT
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
+# Mimics a real bug (2026-09-15): the PDF's own text layer recognizes the
+# vendor and finds an invoice number, but its header -- with the invoice
+# date -- isn't in the text layer's output at all, even though the rest of
+# the page extracts fine. Distinct from the fully-empty-text-layer case
+# full-page OCR already covers.
+COMPONENTS_MISSING_DATE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Invoice # INV-TEST-001 Order details
+
+Some content, but the invoice date isn't in this text layer.
+"""
+
+COMPONENTS_DATE_ONLY_SUPPLEMENT_TEXT = "Invoice Date: Mar 3, 2024"
+
 
 def _file(file_id: str, name: str, mime_type: str = "application/pdf") -> DriveFile:
     return DriveFile(id=file_id, name=name, mime_type=mime_type)
@@ -179,6 +194,92 @@ def test_apply_inbox_actions_raises_when_target_category_folder_missing():
 
     with pytest.raises(ValueError, match="Invoices - Freight-Bundling"):
         apply_inbox_actions(client, [proposal], "root", inbox_folder_id="inbox")
+
+
+def test_propose_from_text_merges_supplemental_text_when_primary_incomplete():
+    file = _file("f1", "scan.pdf")
+    proposal = propose_from_text(
+        file, COMPONENTS_MISSING_DATE_TEXT, supplemental_text=COMPONENTS_DATE_ONLY_SUPPLEMENT_TEXT
+    )
+
+    assert proposal.extracted.invoice_number == "INV-TEST-001"
+    from datetime import date
+
+    assert proposal.extracted.doc_date == date(2024, 3, 3)
+    assert proposal.via_ocr is True
+    assert any("OCR" in issue for issue in proposal.extracted.issues)
+    # Components never auto-file regardless -- but the caution should be
+    # there specifically because a field came from the OCR supplement.
+    assert proposal.ready_to_file is False
+
+
+def test_propose_from_text_ignores_supplemental_text_when_already_complete():
+    file = _file("f1", "scan.pdf")
+    baseline = propose_from_text(file, FREIGHT_INVOICE_TEXT)
+    with_supplement = propose_from_text(
+        file, FREIGHT_INVOICE_TEXT, supplemental_text="some other unrelated OCR noise"
+    )
+
+    assert with_supplement.extracted == baseline.extracted
+    assert with_supplement.via_ocr is False
+
+
+def test_propose_from_text_ignores_supplemental_text_that_adds_nothing():
+    file = _file("f1", "scan.pdf")
+    proposal = propose_from_text(
+        file, COMPONENTS_MISSING_DATE_TEXT, supplemental_text="unrelated noise with no date in it"
+    )
+
+    assert proposal.extracted.doc_date is None
+    assert proposal.via_ocr is False
+    assert not any("OCR" in issue for issue in proposal.extracted.issues)
+
+
+def test_propose_from_text_full_page_ocr_takes_priority_over_supplemental_text():
+    # via_ocr=True already means the whole text came from a full-page OCR
+    # pass -- a supplemental_text merge on top of that would be redundant
+    # (both readings came from the same rendered page).
+    file = _file("f1", "scan.pdf")
+    proposal = propose_from_text(
+        file, FREIGHT_INVOICE_TEXT, via_ocr=True, supplemental_text=COMPONENTS_DATE_ONLY_SUPPLEMENT_TEXT
+    )
+
+    assert proposal.via_ocr is True
+    assert any("OCR" in issue for issue in proposal.extracted.issues)
+
+
+def test_propose_inbox_actions_tries_ocr_supplement_only_when_worth_it():
+    client = FakeDriveClient(
+        children={
+            "inbox": [
+                _file("f1", "partial.pdf"),  # recognized vendor, missing date
+                _file("f2", "ready.pdf"),  # already complete
+            ]
+        },
+        contents={"f1": b"partial-bytes", "f2": b"ready-bytes"},
+    )
+    calls: list[bytes] = []
+
+    def ocr_supplement(data: bytes) -> str:
+        calls.append(data)
+        return COMPONENTS_DATE_ONLY_SUPPLEMENT_TEXT
+
+    def text_extractor(data: bytes) -> tuple[str, bool]:
+        return (COMPONENTS_MISSING_DATE_TEXT if data == b"partial-bytes" else FREIGHT_INVOICE_TEXT, False)
+
+    proposals = propose_inbox_actions(
+        client, "inbox", text_extractor=text_extractor, ocr_supplement_extractor=ocr_supplement
+    )
+
+    assert calls == [b"partial-bytes"]  # never called for the already-ready file
+    partial = next(p for p in proposals if p.file_id == "f1")
+    from datetime import date
+
+    assert partial.extracted.doc_date == date(2024, 3, 3)
+    assert partial.via_ocr is True
+    ready = next(p for p in proposals if p.file_id == "f2")
+    assert ready.ready_to_file is True
+    assert ready.via_ocr is False
 
 
 def test_apply_inbox_actions_honors_custom_category_folder_names():
