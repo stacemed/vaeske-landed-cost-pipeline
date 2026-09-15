@@ -37,6 +37,16 @@ clean the guess looks; see ``InboxProposal.via_ocr`` in ``inbox.py``.
 
 Never raises: an unrecognized document comes back with every field None
 and an issue explaining why, so one weird PDF doesn't stop a batch run.
+
+2026-09-15: components invoice numbers are sometimes absent from the
+document's own invoice number field entirely but present in the
+vendor's wire-payment memo instructions further down the page
+("...message to receiver when making a payment: [ Black Oak Essentials
+LLC] [USCLSLV26QT-24May] [...]") -- added as a fallback pattern, tried
+only after the two body-text patterns come up empty. Drive's own text
+extraction renders those brackets markdown-escaped (a literal backslash
+before each "[" and "]"), so the pattern matches both escaped and plain
+brackets.
 """
 
 from __future__ import annotations
@@ -70,6 +80,19 @@ _REFUND_KEYWORDS = ("refund", "over payment", "overpayment")
 # The entire extracted text is a bare filename -- Drive couldn't read this
 # file's real content (seen with PDFs converted from an embedded .xlsx).
 _FILENAME_STUB_RE = re.compile(r"^[\w .,&()'-]+\.(?:xlsx|xls|docx|doc|pdf|csv)$", re.IGNORECASE)
+
+# Some invoices put the invoice number nowhere near the top -- it's
+# buried in the vendor's own wire-payment memo instructions instead, as
+# the second of three bracketed segments: "...message to receiver when
+# making a payment: [ Black Oak Essentials LLC] [USCLSLV26QT-24May]
+# [Containers&Lids&Sleeves]". Confirmed against a real 2024 invoice
+# (2026-09-15) -- Drive's own text extraction renders the brackets
+# markdown-escaped ("\[...\]"), so both forms are matched.
+_REMARK_INVOICE_RE = (
+    r"message to receiver when making (?:the |a )?payment:?\s*"
+    r"\\?\[[^\]]*\\?\]\s*"
+    r"\\?\[\s*([^\]\\]+?)\s*\\?\]"
+)
 
 _KNOWN_COMPONENT_NAMES = (
     "rack box",
@@ -306,6 +329,7 @@ def _extract_components(text: str) -> ExtractedInvoice:
         [
             r"(?:invoice|order)\s*#?\s*[:\-]?\s*([A-Z][A-Z0-9\-]{3,})",
             r"\b(INV-[A-Z0-9\-]+)\b",
+            _REMARK_INVOICE_RE,
         ],
     )
 

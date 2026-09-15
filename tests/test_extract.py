@@ -483,3 +483,49 @@ def test_overhead_date_survives_ocr_separator_variants(raw_date, expected):
     text = f"From: Whymon Huang (WEIMIN HUANG) Inspection Invoice\n\n#INV-Inspection-1\n\nInvoice Date: {raw_date}\n"
     extracted = extract_from_text(text)
     assert extracted.doc_date == expected
+
+
+COMPONENTS_REMARK_MEMO_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Wire Transfer Confirmation
+
+Remark-Please include the following memo/Message to receiver when making a payment:
+[ Black Oak Essentials LLC] [USCLSLV26QT-24May] [Containers&Lids&Sleeves]
+"""
+
+
+def test_components_falls_back_to_remark_memo_for_invoice_number():
+    # Real bug (2026-09-15): this vendor's wire confirmations sometimes
+    # carry no invoice number in the body at all -- only in the bank's
+    # own "message to receiver" remittance memo, as the second of three
+    # bracketed segments.
+    extracted = extract_from_text(COMPONENTS_REMARK_MEMO_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "USCLSLV26QT-24May"
+
+
+def test_components_prefers_body_invoice_number_over_remark_memo():
+    # The remark-memo pattern is a fallback, tried only once the two
+    # body-text patterns come up empty -- a real invoice number in the
+    # body should never be overridden by the memo.
+    text = COMPONENTS_WIRE_TRANSFER_TEXT + (
+        "\nRemark-Please include the following memo/Message to receiver "
+        "when making a payment:\n[ Black Oak Essentials LLC] [SOME-OTHER-CODE] [details]\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.invoice_number == "INV-25Q1SLV26QTINNERBOX-01"
+
+
+def test_components_falls_back_to_remark_memo_with_markdown_escaped_brackets():
+    # Real bug (2026-09-15): Drive's own text extraction renders this
+    # vendor's memo brackets as "\[...\]", not plain "[...]" -- the exact
+    # text pulled from a real 2024 invoice PDF.
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n\n"
+        "Remark-Please include the following memo/Message to receiver when making a payment: "
+        r"\[ Black Oak Essentials LLC\] \[USCLSLV26QT-24May\] \[Containers\&Lids$Sleeve"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "USCLSLV26QT-24May"
