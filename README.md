@@ -59,6 +59,37 @@ tests/                    # tests, several checked against real numbers /
                            # workbook and Drive
 ```
 
+## Adding another user
+
+The one-time Google Cloud project + OAuth client setup (see "Setting up
+credentials" in [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md))
+only needs to happen once, by whoever creates it. Adding a second person
+to actually run these scripts doesn't repeat that — each person just
+needs their own authorized token:
+
+1. In Google Cloud Console, under **APIs & Services → OAuth consent
+   screen → Test users**, add their Google account email. This is
+   required for anyone besides the original developer to sign in at all
+   — the app stays in "Testing" publishing status (capped at 100 named
+   test users, plenty for a small team) rather than going through
+   Google's public-app verification, which isn't needed for a couple of
+   people using their own tool.
+2. Confirm their Google account already has access to the Drive folder
+   itself. Drive sharing is separate from being a Test user — the API
+   only sees what their signed-in account can see in Drive.
+3. Send them the same `client_secret_<id>.json` file. It identifies the
+   app, not a person, so it's fine to share between authorized users —
+   but still keep it out of git, as `.gitignore` already does.
+4. They run the one-time browser sign-in themselves (see "Setting up
+   credentials" in `docs/DRIVE_INGESTION.md`) to produce their **own**
+   `token.json`. Never share a `token.json` between people — it's tied
+   to whichever Google account signed in to create it.
+
+Since the app stays in Testing status, each person's `token.json`
+expires after about 7 days and needs to be regenerated the same way —
+a non-issue for occasional use, just re-run the sign-in step before the
+next run rather than expecting it to stay valid indefinitely.
+
 ## Development
 
 ```
