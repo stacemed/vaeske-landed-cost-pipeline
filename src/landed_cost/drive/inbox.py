@@ -20,6 +20,16 @@ a real invoice: the whole invoice-number/date header wasn't in
 case -- see ``propose_from_text``'s ``supplemental_text`` -- distinct
 from the full-page OCR fallback in ``pdf_text.py``, which only ever
 triggers when the text layer is entirely empty.
+
+2026-09-16: a real Inbox folder had a ``.gdoc`` shortcut file (a tiny
+JSON pointer, not a real PDF -- Google Drive Desktop leaves these behind
+for native Docs) sitting alongside real invoices. ``pypdf`` throwing on
+it crashed the whole batch, taking the other files' proposals down with
+it. ``propose_inbox_actions`` now checks ``mime_type`` before even
+downloading a non-PDF file, and catches any parse failure on a real PDF
+too (a corrupt file is not hypothetical) -- either way the file gets a
+clear issue and lands in Needs Review, and every other file in the same
+run still gets processed.
 """
 
 from __future__ import annotations
@@ -171,14 +181,42 @@ def propose_inbox_actions(
     for child in client.list_children(inbox_folder_id):
         if child.is_folder:
             continue
-        raw = client.download_file(child.id)
-        text, used_ocr = text_extractor(raw)
+        if child.mime_type != "application/pdf":
+            proposals.append(_unreadable_proposal(
+                child,
+                f"not a PDF (Drive reports its type as {child.mime_type!r}) -- "
+                "this tool only reads PDFs, needs manual filing",
+            ))
+            continue
+        try:
+            raw = client.download_file(child.id)
+            text, used_ocr = text_extractor(raw)
+        except Exception as exc:  # noqa: BLE001 -- a single bad file must not sink the whole batch
+            proposals.append(_unreadable_proposal(
+                child, f"could not be read as a PDF ({exc}) -- needs manual filing"
+            ))
+            continue
         proposal = propose_from_text(child, text, via_ocr=used_ocr)
         if not used_ocr and _worth_ocr_supplement(proposal.extracted):
             ocr_text = ocr_supplement_extractor(raw)
             proposal = propose_from_text(child, text, via_ocr=False, supplemental_text=ocr_text)
         proposals.append(proposal)
     return proposals
+
+
+def _unreadable_proposal(file: DriveFile, reason: str) -> InboxProposal:
+    """A proposal for a file that couldn't even be read as a PDF -- still
+    reported (not silently dropped), always routed to Needs Review, name
+    left untouched since there's nothing to base a rename on.
+    """
+    extracted = ExtractedInvoice(issues=(reason,))
+    return InboxProposal(
+        file_id=file.id,
+        original_name=file.name,
+        extracted=extracted,
+        proposed_name=file.name,
+        ready_to_file=False,
+    )
 
 
 def apply_inbox_actions(
