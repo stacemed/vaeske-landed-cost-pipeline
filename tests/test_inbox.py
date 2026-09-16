@@ -49,11 +49,13 @@ class FakeDriveClient:
         self._contents = contents or {}
         self.renamed: dict[str, str] = {}
         self.moved: list[tuple[str, str, str]] = []  # (file_id, new_parent, old_parent)
+        self.downloaded: list[str] = []
 
     def list_children(self, folder_id: str) -> list[DriveFile]:
         return self._children.get(folder_id, [])
 
     def download_file(self, file_id: str) -> bytes:
+        self.downloaded.append(file_id)
         return self._contents[file_id]
 
     def rename_file(self, file_id: str, new_name: str) -> None:
@@ -134,6 +136,63 @@ def test_propose_inbox_actions_skips_subfolders_and_uses_text_extractor():
 
     assert len(proposals) == 1
     assert proposals[0].ready_to_file is True
+
+
+def test_propose_inbox_actions_flags_non_pdf_without_downloading():
+    # Real bug (2026-09-16): a Google Doc shortcut file (".gdoc", tiny
+    # JSON pointer content, not a real PDF) sitting in the Inbox crashed
+    # pypdf and took down the whole batch. Now it's flagged and skipped
+    # -- download_file is never even called for it.
+    client = FakeDriveClient(
+        children={
+            "inbox": [
+                _file("f1", "notes.gdoc", mime_type="application/vnd.google-apps.document"),
+                _file("f2", "scan.pdf"),
+            ]
+        },
+        contents={"f2": b"fake-pdf-bytes"},
+    )
+
+    proposals = propose_inbox_actions(
+        client, "inbox", text_extractor=lambda data: (FREIGHT_INVOICE_TEXT, False)
+    )
+
+    assert len(proposals) == 2
+    gdoc_proposal = next(p for p in proposals if p.file_id == "f1")
+    assert gdoc_proposal.ready_to_file is False
+    assert gdoc_proposal.proposed_name == "notes.gdoc"
+    assert any("not a PDF" in issue for issue in gdoc_proposal.extracted.issues)
+    assert client.downloaded == ["f2"]  # never even tried to download the .gdoc
+    pdf_proposal = next(p for p in proposals if p.file_id == "f2")
+    assert pdf_proposal.ready_to_file is True
+
+
+def test_propose_inbox_actions_recovers_from_a_corrupt_pdf_without_losing_the_batch():
+    # A single unreadable/corrupt file must not crash the whole run --
+    # the other real PDFs in the same Inbox still need to be processed.
+    def flaky_extractor(data: bytes) -> tuple[str, bool]:
+        if data == b"corrupt":
+            raise ValueError("Stream has ended unexpectedly")
+        return FREIGHT_INVOICE_TEXT, False
+
+    client = FakeDriveClient(
+        children={
+            "inbox": [
+                _file("f1", "broken.pdf"),
+                _file("f2", "scan.pdf"),
+            ]
+        },
+        contents={"f1": b"corrupt", "f2": b"fake-pdf-bytes"},
+    )
+
+    proposals = propose_inbox_actions(client, "inbox", text_extractor=flaky_extractor)
+
+    assert len(proposals) == 2
+    broken_proposal = next(p for p in proposals if p.file_id == "f1")
+    assert broken_proposal.ready_to_file is False
+    assert any("could not be read as a PDF" in issue for issue in broken_proposal.extracted.issues)
+    good_proposal = next(p for p in proposals if p.file_id == "f2")
+    assert good_proposal.ready_to_file is True
 
 
 def test_apply_inbox_actions_files_ready_proposals_into_category_folder():
