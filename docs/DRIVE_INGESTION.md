@@ -146,31 +146,23 @@ service-account email, which is more setup for no benefit here):
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a
    project (or reuse one), enable the **Google Drive API**, and under
    "APIs & Services > Credentials" create an OAuth client ID of type
-   **Desktop app**. Download the resulting `client_secret.json`.
-2. Run a one-time local authorization flow to turn that into a cached
+   **Desktop app**. Download the resulting `client_secret_<id>.json`.
+2. Run the one-time local authorization flow to turn that into a cached
    user token (`token.json`) that `GoogleDriveClient.from_authorized_user_file`
    reads:
 
-   ```python
-   from google_auth_oauthlib.flow import InstalledAppFlow
-
-   flow = InstalledAppFlow.from_client_secrets_file(
-       "client_secret.json",
-       scopes=["https://www.googleapis.com/auth/drive"],
-   )
-   credentials = flow.run_local_server(port=0)
-   with open("token.json", "w") as f:
-       f.write(credentials.to_json())
+   ```
+   pip install -e ".[drive]"
+   python scripts/get_token.py client_secret_<id>.json
    ```
 
    This opens a browser, asks you to sign in as the account the folder is
    shared with, shows an "unverified app" warning (expected -- click
    **Advanced > Go to \[app name\] (unsafe)**; it just means this personal
    OAuth client hasn't been through Google's public-app review, not that
-   anything is actually wrong), and writes `token.json`. Keep both
-   `client_secret.json` and `token.json` out of git -- `.gitignore`
-   already excludes `client_secret*.json`, `token.json`, and
-   `credentials.json`.
+   anything is actually wrong), and writes `token.json`. Keep both the
+   client secret file and `token.json` out of git -- `.gitignore` already
+   excludes `client_secret*.json`, `token.json`, and `credentials.json`.
 
    Note the scope is the full `.../auth/drive`, not `drive.readonly` --
    `process_inbox.py` needs to rename and move files, and the narrower
