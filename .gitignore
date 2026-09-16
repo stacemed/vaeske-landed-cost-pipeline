@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env
+build/
+dist/
+
+# Google Drive OAuth credentials -- never commit these
+client_secret*.json
+token.json
+credentials.json

@@ -1,0 +1,715 @@
+from datetime import date
+
+import pytest
+
+from landed_cost.models import Category, DocumentType
+from landed_cost.drive.extract import extract_from_text, propose_filename
+from landed_cost.models import SourceDocument
+
+# Fixture texts below mirror the structure of real documents found in the
+# project's Drive folder (Linkhub freight invoices, Wells Fargo/Wise
+# confirmations, Weimin Huang inspection invoices) -- trimmed to the
+# lines the extractor actually keys on.
+
+FREIGHT_INVOICE_TEXT = """
+John Grattan Invoice JG20250421E
+
+INVOICE Shenzhen Linkhub CO., LTD
+Room 1801, Building 1, Wanting Building
+
+INVOICE No. JG20250421E US$3,651.21 INVOICE DATE 21-Apr-2025 DUE DATE 23-Apr-2025
+
+BILL TO
+VAESKE
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+DDP Sea Freight LTL LH02160460 Ship to IUSL
+Bundling 246units $186.44 flat rate 1 $186.44
+Subtotal $3,651.21
+THANK YOU FOR YOUR BUSINESS TOTAL US$3,651.21
+"""
+
+FREIGHT_WIRE_CONFIRMATION_TEXT = """
+Wire Money - Confirmation | Wells Fargo
+
+Confirmation
+
+You submitted your wire on 04/22/2025 at 11:44 am Pacific Time.
+
+TO FBABEE
+China
+
+ADDITIONAL INFORMATION
+
+JG20250421E
+
+MESSAGE TO RECIPIENT'S BANK
+
+JG20250421E
+
+STATUS PENDING
+"""
+
+FREIGHT_REFUND_TEXT = """
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20250612E-Refurn US$-2,861.85 INVOICE DATE 11-Jun-2025
+
+Discounts Over payment refund -$2,861.85 flat rate 1 -$2,861.85
+
+Subtotal -$2,861.85
+"""
+
+OVERHEAD_INVOICE_TEXT = """
+From: Whymon Huang (WEIMIN HUANG) Inspection Invoice
+
+#INV-Inspection-250930
+
+Balance Paid $118.00)
+
+Bill To Vaeske
+
+Invoice Date: 29-Sep-25 Attn: John Grattan Terms: Custom Due Date: 30-Sep-25
+
+Subject: Transport fee Duration: 2 Man Day
+"""
+
+COMPONENTS_WIRE_TEXT = """
+Transfer confirmation
+
+Transfer created November 05, 2025 08:31:26 GMT-05:00
+
+Your details
+Name BLACK OAK ESSENTIALS LLC
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference INV-26Q1RCS payment 2b
+"""
+
+COMPONENTS_WIRE_TRANSFER_TEXT = """
+WT FED#03350 COMMUNITY FEDERAL /FTR/BNF=Shenzhen Minzhi BYJ Trading Company
+Invoice # INV-25Q1SLV26QTINNERBOX-01 26 QT Inner Box order
+"""
+
+UNKNOWN_TEXT = "Some random receipt from a coffee shop, nothing to do with any vendor here."
+
+# The four fixtures below are trimmed from real 2024 Drive files that
+# exposed genuine bugs during the first real-world dry run (2026-09-05).
+
+COMPONENTS_WHYMON_FEDWIRE_TEXT = """
+Wire Money - Confirmation | Wells Fargo
+
+Confirmation
+
+You submitted your wire on 12/16/2024 at 11:08 am Pacific Time.
+
+TO WHYMON FEDWIRE
+
+United States
+
+AMOUNT $19,817.37
+
+MESSAGE TO RECIPIENT'S BANK
+
+INV USQ4RR12C26C
+
+STATUS PENDING
+"""
+
+COMPONENTS_WIRE_SUCCESSFULLY_SUBMITTED_TEXT = """
+Confirmation
+
+You successfully submitted your wire on 04/21/2024 at 08:57 pm Pacific Time.
+
+To Whymon FedWire
+
+United States
+
+Amount $10,395.00
+
+Message to recipient's bank
+
+racks invoice US3RD24 03
+
+Status Scheduled
+"""
+
+# A real Shenzhen Minzhi BYJ invoice has a line reading "Invoice ...
+# Subject: TTL BALANCE payment ..." -- before the digit filter, "Subject"
+# itself got captured as the "invoice number" since it's a capitalized
+# word immediately following "Invoice".
+COMPONENTS_SUBJECT_FALSE_POSITIVE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Invoice Subject: TTL BALANCE payment for Q4 2024 order US3rdR2401
+"""
+
+COMPONENTS_NO_DIGIT_CANDIDATE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Invoice Subject: no reference numbers anywhere in this memo
+"""
+
+FILENAME_STUB_TEXT = "INV-USR2312-01 YY 2nd Racks Balance 240106.xlsx"
+
+
+def test_freight_invoice_extracts_confidently():
+    extracted = extract_from_text(FREIGHT_INVOICE_TEXT)
+
+    assert extracted.vendor_abbrev == "FBSL"
+    assert extracted.category is Category.FREIGHT_BUNDLING_PACKAGING
+    assert extracted.category_tag == "Frei-Bund"
+    assert extracted.invoice_number == "JG20250421E"
+    assert extracted.doc_date == date(2025, 4, 21)
+    assert extracted.doc_type is DocumentType.PAID_INVOICE
+    assert extracted.issues == ()
+    assert extracted.is_ready_to_file is True
+
+
+def test_freight_wire_confirmation_detected_as_payment_confirmation():
+    extracted = extract_from_text(FREIGHT_WIRE_CONFIRMATION_TEXT)
+
+    assert extracted.vendor_abbrev == "FBSL"
+    assert extracted.invoice_number == "JG20250421E"
+    assert extracted.doc_date == date(2025, 4, 22)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.is_ready_to_file is True
+
+
+def test_freight_refund_detected_from_keywords():
+    extracted = extract_from_text(FREIGHT_REFUND_TEXT)
+
+    assert extracted.invoice_number == "JG20250612E-Refurn"
+    assert extracted.doc_type is DocumentType.REFUND_INVOICE
+
+
+def test_overhead_invoice_extracts_confidently():
+    extracted = extract_from_text(OVERHEAD_INVOICE_TEXT)
+
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.category_tag == "Over"
+    # "INV-" is dropped from the source text's "#INV-Inspection-250930" --
+    # redundant next to the doc-type suffix (2026-09-08).
+    assert extracted.invoice_number == "Inspection-250930"
+    assert extracted.doc_date == date(2025, 9, 29)
+    assert extracted.doc_type is DocumentType.PAID_INVOICE
+    assert extracted.is_ready_to_file is True
+
+
+def test_overhead_invoice_number_without_inv_prefix_in_source_text():
+    text = """
+    From: Whymon Huang (WEIMIN HUANG) Inspection Invoice
+
+    #Inspection-241027
+
+    Invoice Date: 27-Nov-24
+    """
+    extracted = extract_from_text(text)
+    assert extracted.invoice_number == "Inspection-241027"
+
+
+def test_components_never_ready_to_file_even_with_good_matches():
+    extracted = extract_from_text(COMPONENTS_WIRE_TEXT)
+
+    assert extracted.vendor_abbrev == "WHSM"
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-26Q1RCS"
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
+    # Always flagged, by design, regardless of how good the guess looks.
+    assert extracted.is_ready_to_file is False
+    assert any("no consistent format" in issue for issue in extracted.issues)
+
+
+def test_components_extracts_from_wire_transfer_memo():
+    extracted = extract_from_text(COMPONENTS_WIRE_TRANSFER_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-25Q1SLV26QTINNERBOX-01"
+    assert extracted.is_ready_to_file is False
+
+
+def test_unknown_vendor_returns_no_fields_and_an_issue():
+    extracted = extract_from_text(UNKNOWN_TEXT)
+
+    assert extracted.vendor_abbrev is None
+    assert extracted.category is None
+    assert extracted.is_ready_to_file is False
+    assert len(extracted.issues) == 1
+
+
+def test_empty_text_is_handled_like_unknown_vendor():
+    extracted = extract_from_text("")
+    assert extracted.is_ready_to_file is False
+    assert extracted.issues
+
+
+def test_propose_filename_fills_in_all_fields_when_confident():
+    extracted = extract_from_text(FREIGHT_INVOICE_TEXT)
+    name = propose_filename(extracted, "pdf")
+
+    assert name == "2025-04-21_FBSL_Frei-Bund_JG20250421E_INV-paid.pdf"
+    # The generator and the parser must stay in sync with each other.
+    parsed = SourceDocument.from_filename(name)
+    assert parsed.invoice_number == "JG20250421E"
+    assert parsed.doc_type is DocumentType.PAID_INVOICE
+
+
+def test_propose_filename_uses_placeholders_for_missing_fields():
+    extracted = extract_from_text(UNKNOWN_TEXT)
+    name = propose_filename(extracted, "pdf")
+
+    assert name == "UNKNOWN-DATE_UNKNOWN-VENDOR_UNKNOWN-CATEGORY_UNKNOWN-INVOICE_UNKNOWN-DOCTYPE.pdf"
+
+
+def test_whymon_fedwire_wire_confirmation_recognized_as_components():
+    # Real bug (2026-09-05): a domestic wire to Weimin Huang shows the
+    # payee as "WHYMON FEDWIRE" -- never his name or company -- so this
+    # never matched any vendor keyword at all before "whymon" was added.
+    extracted = extract_from_text(COMPONENTS_WHYMON_FEDWIRE_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.vendor_abbrev == "WHSM"
+    assert extracted.doc_date == date(2024, 12, 16)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
+
+
+def test_wire_confirmation_tolerates_successfully_submitted_phrasing():
+    # Real bug: an older Wells Fargo template reads "You successfully
+    # submitted your wire on 04/21/2024" -- the extra word broke both the
+    # doc-type keyword match and the date regex.
+    extracted = extract_from_text(COMPONENTS_WIRE_SUCCESSFULLY_SUBMITTED_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.doc_date == date(2024, 4, 21)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_FULL
+
+
+def test_invoice_number_extraction_skips_non_digit_false_positive():
+    # Real bug: "Invoice Subject: ..." used to capture "Subject" itself as
+    # the invoice number, since the old regex had no digit requirement.
+    # It should skip that and find the later, real-looking candidate.
+    extracted = extract_from_text(COMPONENTS_SUBJECT_FALSE_POSITIVE_TEXT)
+
+    assert extracted.invoice_number == "US3rdR2401"
+
+
+def test_invoice_number_extraction_gives_up_cleanly_with_no_digit_candidate():
+    extracted = extract_from_text(COMPONENTS_NO_DIGIT_CANDIDATE_TEXT)
+
+    assert extracted.invoice_number is None
+
+
+def test_filename_stub_text_is_not_mistaken_for_real_content():
+    # Real case: a few PDFs (apparently converted from an embedded .xlsx)
+    # gave back only their own filename as "extracted text".
+    extracted = extract_from_text(FILENAME_STUB_TEXT)
+
+    assert extracted.is_ready_to_file is False
+    assert extracted.vendor_abbrev is None
+
+
+# Trimmed from real OCR output (2026-09-09) on scanned/photographed 2024
+# invoices with no text layer -- confirmed via pypdf returning "" on the
+# actual downloaded bytes, then real OCR text pulled to fix these bugs.
+
+OVERHEAD_SUPPORT_TYPE_OCR_TEXT = """
+From: Whymon Huana (WEIMIN HUANG)
+
+Bill To
+
+Vaeske
+
+Attn: John Grattan
+
+Subiect:
+
+Facilitation & local touch base support
+
+Invoice
+
+#INV-Support- 240407
+
+Balance Due
+
+$399.00
+
+Invoice Date: 7-Apr-24
+Terms: Custom
+
+Due Date: 11-Apr-24
+
+WHYMON HUANG
+"""
+
+OVERHEAD_INSPECTION_OCR_WITH_STRAY_SPACE_TEXT = """
+From: Whymon Huang (WEIMIN HUANG)
+
+Subject:
+
+Bunlde bulk order inspection of US& CA SHIPMENTS
+
+Inspection Invoice
+
+Signature
+
+#INV-Inspection- 240301
+
+Balance Due
+
+$168.00
+
+Invoice Date: 3-Mar-24
+Terms: Custom
+
+WHYMON HUANG
+"""
+
+COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+To: Black Oak Essentials LLC
+Attn: John Grattan
+
+#INV-USR2312-01
+Invoice Date: Jan 6, 2024
+
+Order Reference: USR2312- 23DEC
+
+Balance Due: US$7,656.60
+"""
+
+
+def test_overhead_recognizes_support_type_not_just_inspection():
+    # Real bug: routing required the literal word "inspection" in the
+    # text, so Weimin Huang's "Support" and "Facilitation" invoices never
+    # got recognized as overhead at all.
+    extracted = extract_from_text(OVERHEAD_SUPPORT_TYPE_OCR_TEXT)
+
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.invoice_number == "Support-240407"
+    assert extracted.doc_date == date(2024, 4, 7)
+
+
+def test_overhead_strips_ocr_inserted_space_in_reference():
+    # OCR read "#INV-Inspection- 240301" with a stray space after the
+    # hyphen -- the reference must still normalize to one clean token.
+    extracted = extract_from_text(OVERHEAD_INSPECTION_OCR_WITH_STRAY_SPACE_TEXT)
+
+    assert extracted.invoice_number == "Inspection-240301"
+    assert extracted.doc_date == date(2024, 3, 3)
+
+
+def test_components_still_wins_over_overhead_when_vendor_company_present():
+    # Even though this text would match the overhead "#[INV-]<Type>-<ref>"
+    # shape (#INV-USR2312-01), the Shenzhen Minzhi company name means
+    # it's a components purchase invoice, not Weimin Huang's own.
+    extracted = extract_from_text(COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT)
+
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.doc_date == date(2024, 1, 6)
+    assert extracted.is_ready_to_file is False
+
+
+def test_month_name_date_format_parses():
+    extracted = extract_from_text(COMPONENTS_OCR_WITH_MONTH_NAME_DATE_TEXT)
+    assert extracted.doc_date == date(2024, 1, 6)
+
+
+def test_weimin_mention_without_overhead_reference_falls_back_to_components():
+    # A wire confirmation mentions "WHYMON" but never carries his
+    # "#[INV-]<Type>-<ref>" invoice reference -- the safe direction is
+    # components (never auto-files), not a mistaken overhead auto-file.
+    extracted = extract_from_text(
+        "You submitted your wire on 12/16/2024\n\nTO WHYMON FEDWIRE\n\n"
+        "MESSAGE TO RECIPIENT'S BANK\n\nINV USQ4RR12C26C"
+    )
+    assert extracted.category is Category.COMPONENTS
+
+
+# Real bug (2026-09-09): checking freight signals before Weimin/company
+# signals mis-routed two real overhead/components invoices, because both
+# mention "FBAbee" only in passing, not as a freight wire recipient.
+
+OVERHEAD_MENTIONS_FBABEE_IN_PASSING_TEXT = """
+From: Whymon Huang (WEIMIN HUANG)
+
+Inspection Invoice
+
+#INV-Inspection-240102
+
+Invoice Date: 2-Jan-24
+
+P/S: racks quality check before FBAbee's bundling
+"""
+
+COMPONENTS_MENTIONS_FBABEE_IN_PASSING_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+INVOICE No.: #INV-USPKG-2401R
+Invoice Date: Jan 6, 2024
+
+Remarks:
+*Cost Included local delivery to FBABee warehouse
+"""
+
+
+def test_overhead_still_wins_over_incidental_fbabee_mention():
+    extracted = extract_from_text(OVERHEAD_MENTIONS_FBABEE_IN_PASSING_TEXT)
+    assert extracted.category is Category.OVERHEAD
+
+
+def test_components_still_wins_over_incidental_fbabee_mention():
+    extracted = extract_from_text(COMPONENTS_MENTIONS_FBABEE_IN_PASSING_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "INV-USPKG-2401R"
+    # Real bug: OCR read "Invoice Date." with a period, not a colon.
+    assert extracted.doc_date == date(2024, 1, 6)
+
+
+@pytest.mark.parametrize(
+    "raw_date,expected",
+    [
+        ("2-Jan-24", date(2024, 1, 2)),  # well-formed baseline
+        ("2Jan-24", date(2024, 1, 2)),  # OCR dropped the separator
+        ("11 Jan-24", date(2024, 1, 11)),  # OCR rendered it as a space
+    ],
+)
+def test_overhead_date_survives_ocr_separator_variants(raw_date, expected):
+    text = f"From: Whymon Huang (WEIMIN HUANG) Inspection Invoice\n\n#INV-Inspection-1\n\nInvoice Date: {raw_date}\n"
+    extracted = extract_from_text(text)
+    assert extracted.doc_date == expected
+
+
+COMPONENTS_REMARK_MEMO_TEXT = """
+Shenzhen Minzhi BYJ Trading Company
+
+Wire Transfer Confirmation
+
+Remark-Please include the following memo/Message to receiver when making a payment:
+[ Black Oak Essentials LLC] [USCLSLV26QT-24May] [Containers&Lids&Sleeves]
+"""
+
+
+def test_components_falls_back_to_remark_memo_for_invoice_number():
+    # Real bug (2026-09-15): this vendor's wire confirmations sometimes
+    # carry no invoice number in the body at all -- only in the bank's
+    # own "message to receiver" remittance memo, as the second of three
+    # bracketed segments.
+    extracted = extract_from_text(COMPONENTS_REMARK_MEMO_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "USCLSLV26QT-24May"
+
+
+def test_components_prefers_body_invoice_number_over_remark_memo():
+    # The remark-memo pattern is a fallback, tried only once the two
+    # body-text patterns come up empty -- a real invoice number in the
+    # body should never be overridden by the memo.
+    text = COMPONENTS_WIRE_TRANSFER_TEXT + (
+        "\nRemark-Please include the following memo/Message to receiver "
+        "when making a payment:\n[ Black Oak Essentials LLC] [SOME-OTHER-CODE] [details]\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.invoice_number == "INV-25Q1SLV26QTINNERBOX-01"
+
+
+def test_components_falls_back_to_remark_memo_with_markdown_escaped_brackets():
+    # Real bug (2026-09-15): Drive's own text extraction renders this
+    # vendor's memo brackets as "\[...\]", not plain "[...]" -- the exact
+    # text pulled from a real 2024 invoice PDF.
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n\n"
+        "Remark-Please include the following memo/Message to receiver when making a payment: "
+        r"\[ Black Oak Essentials LLC\] \[USCLSLV26QT-24May\] \[Containers\&Lids$Sleeve"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.invoice_number == "USCLSLV26QT-24May"
+
+
+# --- Components naming convention (2026-09-15): SBIC vendor + deposit/balance/full doc types ---
+
+SBIC_ORDER_TEXT = """
+3/7/24, 10:23 PM Trade Assurance Order Details
+
+Home  My Alibaba  Order Management  Order details
+
+Trade Assurance Order Shanghai Beone Industrial Co., Ltd. Order number: 204243854001026990
+
+Order Payment Dispatch Delivery Review
+
+Initial payment being processed
+
+Mar. 7, 2024, 20:22:36 PST., you have submitted your credit/debit card payment.
+Your payment amount USD 1255.50 is currently being processed.
+"""
+
+COMPONENTS_DEPOSIT_INVOICE_TEXT = """
+INV-JUN24USQ4CRP 24Q4 RACKS,CONTAINERS & PKGS
+
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+30% Down Payment Due (Item 1~5):
+
+$21,253.20
+
+Subject: Q4 Repeat-5KXRacks+3K X12QT & 3K X26QT CTNS/LIDS
+
+Deposit 30% $21,253.20
+
+TTL Balance dued before dispatch $49,590.80
+"""
+
+# Real bug (2026-09-15): this invoice's own header calls the 70% "Down
+# Payment Due", but its Subject line and payment breakdown make clear
+# it's actually the *balance* (this vendor's standard split is 30%
+# deposit / 70% balance) -- trimmed from the real PDF text.
+COMPONENTS_MISLABELED_BALANCE_TEXT = """
+INV-24Q4SLV 24Q4 SLEEVES
+
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+70% Down Payment Due:
+
+$9,332.40
+
+Subject: Q4-2K X12QT Sleeve & 2K X26QT Sleeve Balance Payment
+
+Deposit 30% $3,999.60
+
+Balance dued before dispatch $9,332.40
+"""
+
+COMPONENTS_NO_SPLIT_LANGUAGE_TEXT = """
+Shenzhen Minzhi BYJ Trading Company INVOICE
+
+INV-US3rdR24-01
+
+Subject: No.3 Racks-1st order-1,000 Racks
+
+Item & Description Qty Rate Amount
+1 Rack Set 1000 $4.95 $4,950.00
+"""
+
+
+def test_sbic_vendor_recognized_as_components():
+    extracted = extract_from_text(SBIC_ORDER_TEXT)
+    assert extracted.category is Category.COMPONENTS
+    assert extracted.vendor_abbrev == "SBIC"
+
+
+def test_components_deposit_invoice_detected():
+    extracted = extract_from_text(COMPONENTS_DEPOSIT_INVOICE_TEXT)
+    assert extracted.doc_type is DocumentType.DEPOSIT_INVOICE
+
+
+def test_components_percentage_overrides_misleading_down_payment_label():
+    # The vendor's own header says "Down Payment" but the invoice is
+    # actually asking for the 70% balance -- the percentage wins.
+    extracted = extract_from_text(COMPONENTS_MISLABELED_BALANCE_TEXT)
+    assert extracted.doc_type is DocumentType.BALANCE_INVOICE
+    assert any("bal2/bal3" in issue for issue in extracted.issues)
+
+
+def test_components_no_split_language_defaults_to_full_invoice():
+    extracted = extract_from_text(COMPONENTS_NO_SPLIT_LANGUAGE_TEXT)
+    assert extracted.doc_type is DocumentType.FULL_INVOICE
+
+
+def test_components_refund_keyword_wins_over_payment_stage():
+    text = COMPONENTS_DEPOSIT_INVOICE_TEXT + "\nThis order was over payment and will be refunded.\n"
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.REFUND_INVOICE
+
+
+def test_components_payment_confirmation_gets_deposit_variant():
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n"
+        "Transfer confirmation\n"
+        "Reference INV-26Q1RCS 30% deposit payment\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_DEPOSIT
+
+
+def test_components_payment_confirmation_gets_balance_variant():
+    text = (
+        "Shenzhen Minzhi BYJ Trading Company\n"
+        "Transfer confirmation\n"
+        "Reference INV-26Q1RCS balance payment\n"
+    )
+    extracted = extract_from_text(text)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION_BALANCE
+
+
+# --- Overhead payment confirmations without a structured reference (2026-09-15) ---
+# Real bug: Weimin Huang's Wise "Transfer confirmation" payment
+# confirmations never carry the "#INV-Inspection-######" reference his
+# own invoices do -- just a free-text "Reference ..." memo line. Word
+# order and spacing both vary across real files. All 6 fixtures below
+# are trimmed from real files; the business owner independently
+# confirmed the same date/invoice-number/category for every one.
+
+OVERHEAD_PCONF_TEXT = """
+Transfer Invoice
+
+Transfer confirmation
+
+Transfer created January 03, 2024 00:23:10 GMT-05:00
+
+Transfer #920290376
+
+Total to WEIMIN HUANG 200.00 USD
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference rack inspection 240102
+"""
+
+OVERHEAD_PCONF_STRUCTURED_REFERENCE_TEXT = """
+Transfer Invoice
+
+Transfer confirmation
+
+Transfer created October 09, 2024 16:48:54 GMT-04:00
+
+Total to WEIMIN HUANG 168.00 USD
+
+Sent to
+
+Name WEIMIN HUANG
+
+Reference INV-Inspection-241009
+"""
+
+
+def test_overhead_payment_confirmation_without_structured_reference_still_routes_to_overhead():
+    extracted = extract_from_text(OVERHEAD_PCONF_TEXT)
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.vendor_abbrev == "WH"
+    assert extracted.invoice_number == "Inspection-240102"
+    assert extracted.doc_date == date(2024, 1, 3)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.is_ready_to_file is True
+
+
+def test_overhead_payment_confirmation_with_inv_prefixed_reference():
+    # "Reference INV-Inspection-241009" -- closer to the structured form
+    # but still missing the leading "#" _find_overhead_reference requires.
+    extracted = extract_from_text(OVERHEAD_PCONF_STRUCTURED_REFERENCE_TEXT)
+    assert extracted.category is Category.OVERHEAD
+    assert extracted.invoice_number == "Inspection-241009"
+    assert extracted.doc_date == date(2024, 10, 9)
+
+
+def test_components_wire_confirmation_without_inspection_word_stays_components():
+    # The service-reference fallback is scoped to "inspection" -- a real
+    # components wire confirmation (no such word) must not be flipped.
+    extracted = extract_from_text(COMPONENTS_WHYMON_FEDWIRE_TEXT)
+    assert extracted.category is Category.COMPONENTS
