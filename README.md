@@ -50,6 +50,7 @@ src/landed_cost/models/   # the data model (milestone 1)
 src/landed_cost/drive/    # Drive ingestion, filename parsing, and PDF-text
                            # field extraction (milestone 2)
 scripts/                  # runnable entry points:
+                           #   get_token.py            (one-time OAuth sign-in -> token.json)
                            #   ingest_drive_folder.py  (report on category folders)
                            #   process_inbox.py        (guess + file Inbox contents)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
