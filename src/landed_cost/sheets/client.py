@@ -59,3 +59,25 @@ class SheetsClient(Protocol):
         above" in the Sheets UI by hand.
         """
         ...
+
+    def sort_range(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        start_row: int,
+        end_row: int,
+        sort_column_index: int,
+        ascending: bool = True,
+    ) -> None:
+        """Sort rows ``start_row..end_row`` (1-indexed, inclusive) by
+        the given 0-indexed column within that row (0 = column A).
+
+        Uses the Sheets API's native sort-range operation (the same
+        one "Data > Sort range" runs in the UI), not a read-then-
+        rewrite of plain values -- that matters because a native sort
+        carries each row's cell formatting along with it as rows move,
+        while writing sorted values back into a fixed range would
+        leave formatting stuck at its old row position, mismatched
+        with whatever data now sits there.
+        """
+        ...

@@ -53,6 +53,19 @@ old boundary -- fix each one by hand once (extend the range to the
 sheet's current last data row) and it'll keep auto-extending from then
 on.
 
+One side effect of that insertion point: new rows land just above the
+previous last row rather than strictly at the bottom, so Section A
+drifts out of chronological order over repeated runs (harmless -- no
+formula here depends on row order). Pass `--sort` to re-sort the whole
+Section A range by Date after writing -- a real Sheets range sort, so
+per-row formatting moves with its data instead of staying behind at the
+old position. Opt-in, not automatic, since reordering a live financial
+ledger is a real choice:
+
+```
+python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply --sort
+```
+
 ## Step 2 — the invoice registers (Claude session)
 
 ## What this covers
