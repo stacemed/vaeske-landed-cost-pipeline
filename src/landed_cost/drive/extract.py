@@ -414,8 +414,13 @@ def extract_from_text(text: str) -> ExtractedInvoice:
 
     # "to fbabee" (the wire recipient line), not bare "fbabee" -- the
     # word alone shows up incidentally in other vendors' documents too
-    # (see the routing comment above).
-    if "shenzhen linkhub" in lowered or "to fbabee" in lowered:
+    # (see the routing comment above). Matched with optional whitespace
+    # between the words: a real 2024 Wells Fargo confirmation rendered
+    # it "ToFBABee" with no space at all (confirmed 2026-09-18, a batch
+    # of real 2026 freight payment confirmations all fell through to
+    # "could not identify a known vendor" as a result), alongside other
+    # real confirmations that do have the space ("TO FBABEE").
+    if "shenzhen linkhub" in lowered or re.search(r"to\s*fbabee", lowered):
         return _extract_freight(text)
 
     return ExtractedInvoice(issues=("could not identify a known vendor in the document text",))

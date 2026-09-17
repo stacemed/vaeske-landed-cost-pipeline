@@ -8,6 +8,19 @@ actually reads a PDF's content does.
 from __future__ import annotations
 
 import io
+import logging
+
+# pypdf logs (via Python's own logging, straight to stderr with no
+# handler configured) every minor non-compliance it silently recovers
+# from while parsing a real-world PDF -- "could not convert string to
+# float", "Ignoring wrong pointing object", etc. Its own docs say
+# explicitly these mark an issue pypdf *already handled*, not one the
+# caller needs to act on (see pypdf._utils.logger_warning's docstring).
+# Confirmed on a real 2026-09-18 batch: files that logged several of
+# these still extracted their text and classified correctly -- the
+# noise just makes a normal run look like it's failing. Quieted to
+# ERROR so an actually-unrecoverable problem still surfaces.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 
 def extract_text_from_pdf_bytes(data: bytes) -> str:
