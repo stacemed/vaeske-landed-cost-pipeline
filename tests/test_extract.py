@@ -29,6 +29,31 @@ Subtotal $3,651.21
 THANK YOU FOR YOUR BUSINESS TOTAL US$3,651.21
 """
 
+# Real 2024 Wells Fargo confirmation text (confirmed 2026-09-18): the
+# recipient line renders "ToFBABee" with NO space at all, unlike the
+# "TO FBABEE" fixture below -- a batch of real 2026 freight payment
+# confirmations all fell through to "could not identify a known vendor"
+# before the routing regex was loosened to tolerate this.
+FREIGHT_WIRE_CONFIRMATION_NO_SPACE_TEXT = """
+You successfully submitted your wire on 01/16/2024 at 02:40 pm Pacific Time.
+
+ToFBABee
+
+China
+
+From OPEX
+
+Amount $990.04
+
+Wire transfer fee $25.00
+
+Message to recipient's bank
+
+invoice JG20240108E
+
+Status Pending
+"""
+
 FREIGHT_WIRE_CONFIRMATION_TEXT = """
 Wire Money - Confirmation | Wells Fargo
 
@@ -175,6 +200,16 @@ def test_freight_wire_confirmation_detected_as_payment_confirmation():
     assert extracted.vendor_abbrev == "FBSL"
     assert extracted.invoice_number == "JG20250421E"
     assert extracted.doc_date == date(2025, 4, 22)
+    assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
+    assert extracted.is_ready_to_file is True
+
+
+def test_freight_wire_confirmation_with_no_space_recipient_line_still_routes_to_freight():
+    extracted = extract_from_text(FREIGHT_WIRE_CONFIRMATION_NO_SPACE_TEXT)
+
+    assert extracted.vendor_abbrev == "FBSL"
+    assert extracted.invoice_number == "JG20240108E"
+    assert extracted.doc_date == date(2024, 1, 16)
     assert extracted.doc_type is DocumentType.PAYMENT_CONFIRMATION
     assert extracted.is_ready_to_file is True
 
