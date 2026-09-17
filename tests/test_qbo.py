@@ -8,6 +8,7 @@ from landed_cost.sheets.qbo import (
     classify_category,
     clean_payee,
     extract_reference,
+    merge_qbo_csv_texts,
     parse_qbo_quickreport_csv,
     plan_section_a_sync,
 )
@@ -145,3 +146,35 @@ def test_plan_section_a_sync_all_new_when_sheet_is_empty():
 
     assert len(new_rows) == 1
     assert skipped == []
+
+
+def test_merge_qbo_csv_texts_dedupes_identical_reexport():
+    # Same export dropped in a Drive folder twice shouldn't double-count.
+    merged = merge_qbo_csv_texts([SAMPLE_QBO_CSV, SAMPLE_QBO_CSV])
+
+    assert len(merged) == 5
+
+
+def test_merge_qbo_csv_texts_combines_distinct_periods_and_drops_overlap():
+    second_period_csv = """Some Company LLC,,,,,,,,,,
+Account QuickReport,,,,,,,,,,
+"January-December, 2025",,,,,,,,,,
+
+,Distribution account,Transaction date,Transaction type,Num,Name,Description,Account Name,Cleared,Amount,Balance
+Inventory,,,,,,,,,,
+,Inventory,01/08/2024,Expense,,,WT FED#03158 COMMUNITY FEDERAL  /FTR/BNF=Shenzhen Minzhi BYJ Trading Company          SRF#    OWXXXXXXXX253119 TRN#XXXXXXXX2548  RFB#    OWXXXXXXXX253119,Inventory,Uncleared,"16,948.60","16,948.60"
+,Inventory,02/01/2025,Expense,,,WT ... BNF=Shenzhen Linkhub Co Ltd ...,Inventory,Uncleared,500.00,"17,448.60"
+Total for Inventory,,,,,,,,,"$17,448.60",
+"""
+
+    merged = merge_qbo_csv_texts([SAMPLE_QBO_CSV, second_period_csv])
+
+    # 5 from SAMPLE_QBO_CSV + 1 new 2025 one; the 16,948.60 on 01/08/2024
+    # appears in both exports and must only be counted once.
+    assert len(merged) == 6
+    assert sum(1 for t in merged if t.date == date(2024, 1, 8) and t.amount == Decimal("16948.60")) == 1
+    assert any(t.date == date(2025, 2, 1) for t in merged)
+
+
+def test_merge_qbo_csv_texts_empty_list():
+    assert merge_qbo_csv_texts([]) == []

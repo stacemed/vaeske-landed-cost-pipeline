@@ -27,9 +27,14 @@ You have:
 ## Step 1 — sync Section A (no Claude needed)
 
 ```
-python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json
-python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json --apply
+python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
+python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply
 ```
+
+Or, if you'd rather drop the export in Drive than keep it on your
+machine, use `--qbo-folder-id <folder_id>` instead of `--qbo-csv` — it
+reads every `.csv` in that folder (read-only, nothing moved/deleted, so
+old exports can just stay there).
 
 Dry run first, check the output, then `--apply`. Any new row with a
 blank Category means the vendor wasn't recognized — fill that in by
