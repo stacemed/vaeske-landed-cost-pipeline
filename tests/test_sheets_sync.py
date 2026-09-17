@@ -93,9 +93,15 @@ def test_sync_section_a_dry_run_does_not_write():
     assert client.updates == []  # nothing written
 
 
-def test_sync_section_a_apply_writes_new_rows_after_existing_data():
+def test_sync_section_a_apply_inserts_at_the_last_existing_row_not_one_past_it():
+    # Deliberate, not off-by-one: inserting AT the last existing data
+    # row (pushing it down) falls within a formula's existing range
+    # (e.g. SUM(E5:E6)), so Sheets auto-extends it. Inserting one row
+    # past the end (the naive approach) never extends it -- confirmed
+    # on a real run, a SUM(E5:E50) stayed frozen after new rows landed
+    # right after row 50.
     client = FakeSheetsClient({
-        6: ["Freight / bundling / packaging", "2024-01-08", "FBA Bee", "TRN0001", 100.0],
+        6: ["Freight / bundling / packaging", "2024-01-08", "FBA Bee", "", 100.0],
     })
     transactions = [
         QboTransaction(date=date(2024, 1, 8), name="", description="Shenzhen Linkhub", amount=Decimal("100.00")),  # duplicate
@@ -108,13 +114,14 @@ def test_sync_section_a_apply_writes_new_rows_after_existing_data():
 
     assert len(skipped) == 1
     assert len(new_rows) == 1
-    assert first_write_row == 7
-    assert client.inserts == [(7, 1)]  # inserted before writing, not overwritten in place
+    assert first_write_row == 6
+    assert client.inserts == [(6, 1)]
     assert client.updates == [
-        ("'1 TRANSACTIONS'!A7:E7", [["Freight / bundling / packaging", "01/16/2024", "FBA Bee", "", 990.04]])
+        ("'1 TRANSACTIONS'!A6:E6", [["Freight / bundling / packaging", "01/16/2024", "FBA Bee", "", 990.04]])
     ]
-    # row was actually appended into the fake sheet's row 7
-    assert client._rows[7][1] == "01/16/2024"
+    # new row landed at 6; the previously-last existing row got pushed to 7
+    assert client._rows[6][1] == "01/16/2024"
+    assert client._rows[7][1] == "2024-01-08"
 
 
 def test_sync_section_a_apply_inserts_rows_instead_of_overwriting_what_follows():
@@ -144,15 +151,17 @@ def test_sync_section_a_apply_inserts_rows_instead_of_overwriting_what_follows()
     )
 
     assert len(new_rows) == 4
-    assert first_write_row == 7
-    assert client.inserts == [(7, 4)]
+    assert first_write_row == 6
+    assert client.inserts == [(6, 4)]
     # Section B's header and its data must be intact, shifted down by 4
     # (row 9 -> 13, row 11 -> 15) -- never overwritten.
     assert client._rows[13][0] == "B · BY CATEGORY -- each ties to a sheet"
     assert client._rows[15][0] == "Components"
-    # the new transaction rows landed in the freshly-inserted space
-    assert client._rows[7][1] == "01/09/2024"
-    assert client._rows[10][1] == "01/12/2024"
+    # the new transaction rows landed in the freshly-inserted space,
+    # and the previously-last existing row was pushed down intact
+    assert client._rows[6][1] == "01/09/2024"
+    assert client._rows[9][1] == "01/12/2024"
+    assert client._rows[10][1] == "2024-01-08"
 
 
 def test_sync_section_a_flags_unclassified_vendor_but_still_writes_it():
