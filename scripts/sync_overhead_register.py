@@ -17,6 +17,15 @@ document -- this is what correctly picks up e.g. a payment confirmation
 that gets filed after its invoice was already registered on its own. A
 brand-new invoice number gets a freshly inserted row.
 
+Section E's row is found by searching column A for its own
+"OVERHEAD INVOICE REGISTER" title, not a hardcoded row number -- its
+position shifts every time anything above it grows (a Section A sync, or
+a previous run of this same script), so a fixed number goes stale
+silently. --section-e-start-row is still there as an emergency override,
+but you shouldn't need it. Either way, the detected/given row is verified
+against the sheet (it must actually read "Invoice #") before anything is
+written, refusing to run rather than guess if that check fails.
+
 Amount extraction is automated and trusted by default here (unlike
 Components' planned Section C), since a Wise payment confirmation's text
 is a fixed, machine-generated template -- see overhead_register.py's
@@ -47,6 +56,11 @@ from landed_cost.models.documents import SourceDocument
 from landed_cost.sheets.google_sheets_client import GoogleSheetsClient
 from landed_cost.sheets.overhead_register import build_overhead_register_rows
 from landed_cost.sheets.overhead_sync import sync_overhead_register
+from landed_cost.sheets.section_headers import (
+    SECTION_E_TITLE_PATTERN,
+    find_section_data_start_row,
+    verify_column_header,
+)
 
 
 def _read_overhead_documents(
@@ -91,15 +105,18 @@ def main() -> int:
     parser.add_argument(
         "--section-e-start-row",
         type=int,
-        default=100,
-        help="Row number of Section E's FIRST DATA row, one below its header (default: 100, "
-        "matching the live 2024 workbook -- check yours before relying on the default)",
+        default=None,
+        help="Row number of Section E's FIRST DATA row. Normally left unset -- the script "
+        "finds it by searching for the 'OVERHEAD INVOICE REGISTER' section title, since its "
+        "row number shifts over time. Only pass this to override that search.",
     )
     parser.add_argument(
         "--section-a-start-row",
         type=int,
         default=6,
-        help="Row number of Section A's FIRST DATA row, for the Invoice # backfill (default: 6)",
+        help="Row number of Section A's FIRST DATA row, for the Invoice # backfill (default: 6 "
+        "-- stable, since nothing is ever inserted above Section A). Verified against the "
+        "sheet (must read 'Category') before anything is written.",
     )
     parser.add_argument(
         "--apply",
@@ -125,11 +142,38 @@ def main() -> int:
     register_rows = build_overhead_register_rows(documents)
 
     sheets_client = GoogleSheetsClient.from_authorized_user_file(args.credentials)
+
+    if args.section_e_start_row is not None:
+        section_e_start_row = args.section_e_start_row
+    else:
+        try:
+            section_e_start_row = find_section_data_start_row(
+                sheets_client, args.spreadsheet_id, args.sheet_name, SECTION_E_TITLE_PATTERN
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Found Section E at row {section_e_start_row} (searched for its "
+              f"'OVERHEAD INVOICE REGISTER' title).")
+
+    try:
+        verify_column_header(
+            sheets_client, args.spreadsheet_id, args.sheet_name,
+            section_e_start_row - 1, "A", "Invoice #",
+        )
+        verify_column_header(
+            sheets_client, args.spreadsheet_id, args.sheet_name,
+            args.section_a_start_row - 1, "A", "Category",
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     new_rows, updated_rows, backfills = sync_overhead_register(
         sheets_client,
         args.spreadsheet_id,
         args.sheet_name,
-        args.section_e_start_row,
+        section_e_start_row,
         args.section_a_start_row,
         register_rows,
         apply=args.apply,
@@ -169,7 +213,7 @@ def main() -> int:
 
     if args.apply and args.sort and new_rows:
         print(f"\nSorted the whole Section E range (starting at row "
-              f"{args.section_e_start_row}) by Paid date.")
+              f"{section_e_start_row}) by Paid date.")
 
     if not args.apply and (new_rows or updated_rows):
         print("\nDry run only -- pass --apply to actually write these changes.")

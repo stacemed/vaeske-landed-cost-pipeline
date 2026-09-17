@@ -30,12 +30,20 @@ class FakeSheetsClient:
         self.sorts: list[tuple[int, int, int, bool, int]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
+        # Matches the real Sheets API: a gap row inside the populated
+        # area comes back as an empty list, not a break in the
+        # response -- only rows past the sheet's own last populated row
+        # are omitted entirely. A previous version of this fake broke
+        # at the first missing row number instead, which happened to
+        # work for every caller here (they all stop at their own first
+        # blank row anyway) but would silently return an empty result
+        # for anything that needs to search past a gap, like locating a
+        # section header several sections down.
         start_row, end_row, start_col, end_col = _parse_a1_range(a1_range)
+        last_populated_row = max(self._rows, default=start_row - 1)
         values = []
-        for row_number in range(start_row, end_row + 1):
-            if row_number not in self._rows:
-                break
-            full_row = self._rows[row_number]
+        for row_number in range(start_row, min(end_row, last_populated_row) + 1):
+            full_row = self._rows.get(row_number, [])
             values.append(full_row[start_col : end_col + 1])
         return values
 
