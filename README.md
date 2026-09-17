@@ -30,7 +30,7 @@ source workbook. See [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
 See [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md) for the folder
 layout, credential setup, and how to run both.
 
-**Milestone 3: writing back to the Sheet — started.**
+**Milestone 3: writing back to the Sheet — in progress.**
 - `landed_cost.sheets` / `scripts/sync_qbo_transactions.py`: parses a QBO
   "Account QuickReport" CSV, classifies each transaction's category by
   vendor pattern alone (no invoice reading needed for this part), and
@@ -40,19 +40,32 @@ layout, credential setup, and how to run both.
   vendor is never guessed into a category — it's still written (a real
   QBO transaction is never silently dropped) but flagged with a blank
   Category for you to fill in.
+- `landed_cost.sheets.overhead_register` / `overhead_sync` /
+  `scripts/sync_overhead_register.py`: reads every filed document in
+  "Invoices - Overhead", groups them by invoice number, extracts the
+  dollar amount from each PDF's own text (a Wise payment confirmation's
+  fixed template is trusted automatically; extraction failures are
+  flagged, never guessed), and upserts `1 TRANSACTIONS` Section E — a
+  brand-new invoice number gets a new row, an already-registered one is
+  fully rebuilt in place (so a payment confirmation filed after its
+  invoice already registered on its own gets picked up). It then
+  backfills Section A's Invoice # column for every payment it can match
+  on category + exact amount + same year/month with a currently-blank
+  Invoice #; an ambiguous or absent match is left blank and flagged
+  rather than guessed. Dry run by default, `--apply` to write.
 
-This deliberately covers only Section A, the fully mechanical part —
-see [`docs/QBO_EXTRACTION_SOP.md`](docs/QBO_EXTRACTION_SOP.md) for why,
-and for how the rest (the invoice registers, Sections C/D/E, which need
-the invoice PDFs read and matched — still a Claude-session process) fits
-alongside it.
+Sections C (Components) and D (Freight/Bundling) follow the same
+upsert/backfill pattern as Section E but aren't built yet — see
+[`docs/QBO_EXTRACTION_SOP.md`](docs/QBO_EXTRACTION_SOP.md) for how the
+still-manual parts (and `2 FREIGHT` Section A) fit alongside what's
+automated so far.
 
 Not built yet, in planned order:
 
-1. Extending the sync to Sections C/D/E — needs invoice-PDF amount
-   extraction as real code, not just filename classification (see the
-   SOP for why that's a harder, higher-stakes problem than filename
-   guessing and hasn't been automated yet).
+1. The same register sync for Section D (Freight/Bundling) and Section C
+   (Components) — Components' vendor invoice formats are inconsistent
+   enough that its amount extraction will be flagged for review rather
+   than trusted automatically, unlike Overhead's fixed Wise template.
 2. A reconciliation runner that recomputes every `ControlCheck` after a
    pipeline run and refuses to post a "final" set of numbers unless every
    check reads `OK`, matching the workbook's own rule: "if one does not
@@ -64,17 +77,20 @@ Not built yet, in planned order:
 src/landed_cost/models/   # the data model (milestone 1)
 src/landed_cost/drive/    # Drive ingestion, filename parsing, and PDF-text
                            # field extraction (milestone 2)
-src/landed_cost/sheets/   # QBO CSV parsing + 1 TRANSACTIONS Section A
+src/landed_cost/sheets/   # QBO CSV parsing + 1 TRANSACTIONS Section A sync,
+                           # and the Overhead (Section E) invoice register
                            # sync (milestone 3)
 scripts/                  # runnable entry points:
                            #   get_token.py              (one-time OAuth sign-in -> token.json)
                            #   ingest_drive_folder.py    (report on category folders)
                            #   process_inbox.py          (guess + file Inbox contents)
                            #   sync_qbo_transactions.py  (QBO CSV -> 1 TRANSACTIONS Section A)
+                           #   sync_overhead_register.py (Invoices - Overhead -> Section E + Section A backfill)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
 docs/DRIVE_INGESTION.md   # Drive folder layout + credential setup
-docs/QBO_EXTRACTION_SOP.md # SOP + prompt for the rest of the QBO-report
-                           # process (Sections C/D/E) that isn't automated yet
+docs/QBO_EXTRACTION_SOP.md # SOP + prompt for the still-manual part of the
+                           # QBO-report process (Sections C/D) that isn't
+                           # automated yet
 tests/                    # tests, several checked against real numbers /
                            # filenames / invoice text from the source
                            # workbook and Drive

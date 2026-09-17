@@ -1,11 +1,16 @@
 # SOP: Populating 1 TRANSACTIONS / 2 FREIGHT from a QBO report
 
-Two pieces, one automated, one not:
+Three pieces, two automated, one not:
 
 - **`1 TRANSACTIONS` Section A** (the QBO ledger itself) is now handled
   by real code — `scripts/sync_qbo_transactions.py`. No Claude session
   needed for this part.
-- **Everything else** (Sections C/D/E's invoice registers, and
+- **`1 TRANSACTIONS` Section E** (the Overhead invoice register) is also
+  real code now — `scripts/sync_overhead_register.py`. It reads every
+  filed document in "Invoices - Overhead", upserts Section E, and
+  backfills Section A's Invoice # column for matched payments. No Claude
+  session needed for this part either.
+- **Everything else** (Sections C/D's invoice registers, and
   `2 FREIGHT` Section A) still needs the invoice PDFs read and matched
   against QBO — there's no committed code for that yet (see the
   README's "Not built yet" list). This is the manual process for that
@@ -66,11 +71,26 @@ ledger is a real choice:
 python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply --sort
 ```
 
-## Step 2 — the invoice registers (Claude session)
+## Step 2 — sync Section E (no Claude needed)
+
+```
+python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
+python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
+```
+
+`<overhead_folder_id>` is the Drive folder ID of "Invoices - Overhead"
+(from its URL). Run Step 1 first — the backfill needs Section A already
+synced. Dry run first, check the output: any row flagged with a blank
+Overhead $ means amount extraction failed on every document for that
+invoice (fill in by hand); any Section A backfill flagged "ambiguous" or
+"no matching" means it couldn't confidently place that payment (also fill
+in by hand). Everything else backfills automatically.
+
+## Step 3 — the remaining invoice registers (Claude session)
 
 ## What this covers
 
-- Registers C/D/E of `1 TRANSACTIONS` and `2 FREIGHT` Section A — the
+- Registers C/D of `1 TRANSACTIONS` and `2 FREIGHT` Section A — the
   invoice-level detail QBO's own report doesn't have (freight/bundling
   split, deposit vs. balance staging, which document backs which
   payment).
@@ -78,6 +98,7 @@ python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id
 ## What this does NOT cover
 
 - `1 TRANSACTIONS` Section A — see Step 1, that's real code now.
+- `1 TRANSACTIONS` Section E — see Step 2, that's real code now too.
 - `3 COMPONENTS` (the BOM-level purchase-line detail) — maintained
   separately, trusted as-is.
 - Allocating freight/bundling/overhead to shipments or SKUs (Phase 2 —
@@ -108,17 +129,18 @@ access and the QBO CSV either uploaded or accessible):
 
 ```
 I need to populate the invoice registers of my landed-cost Google Sheet
-for <YEAR>: "1 TRANSACTIONS" Sections C/D/E, and "2 FREIGHT" Section A.
+for <YEAR>: "1 TRANSACTIONS" Sections C/D, and "2 FREIGHT" Section A.
 (Section A of 1 TRANSACTIONS is already synced via
-scripts/sync_qbo_transactions.py -- don't rebuild that part.) I'm
+scripts/sync_qbo_transactions.py, and Section E via
+scripts/sync_overhead_register.py -- don't rebuild either part.) I'm
 attaching/providing:
 1. A QBO "Account QuickReport" CSV for the Inventory account, <YEAR> --
    for matching invoices to real transactions, not for rebuilding
    Section A.
 2. Access to my Google Drive "Support Docs" folder (ID: <FOLDER_ID>),
    which has this year's invoices already filed under
-   "Invoices - Components", "Invoices - Freight-Bundling", and
-   "Invoices - Overhead" using a standard filename convention.
+   "Invoices - Components" and "Invoices - Freight-Bundling" using a
+   standard filename convention.
 
 Follow this method:
 
@@ -164,11 +186,7 @@ Freight and bundling as separate columns even though the vendor bills
 them together on one invoice -- split using each invoice's own line
 items.
 
-TABLE 3 -- "1 TRANSACTIONS" Section E (OVERHEAD INVOICE REGISTER)
-Columns: Invoice #, Invoice date, Paid date, Overhead $, Invoice Link
-"Invoice Link" = the filed document's filename.
-
-TABLE 4 -- "2 FREIGHT" Section A (INVOICE REGISTER)
+TABLE 3 -- "2 FREIGHT" Section A (INVOICE REGISTER)
 Columns: Invoice, Prep sheet, Invoice date, Paid date, freight $
 "Prep sheet" = a month label like "2024-01 JAN", from the paid date.
 Freight-only $ (bundling is tracked in Table 2 and in 4 BUNDLING, not
