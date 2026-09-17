@@ -3,9 +3,10 @@
 into an authorized-user token file the other scripts can use.
 
 Run this once per person who needs to run process_inbox.py /
-ingest_drive_folder.py against the real Drive folder. Opens a browser,
-asks you to sign in as whichever Google account has access to the
-Support Docs folder, and writes the resulting token to --out.
+ingest_drive_folder.py / sync_qbo_transactions.py against the real
+Drive folder and Sheet. Opens a browser, asks you to sign in as
+whichever Google account has access to them, and writes the resulting
+token to --out.
 
 This needs a real browser, so run it on your own machine, not inside a
 headless/remote environment.
@@ -20,6 +21,10 @@ Usage:
 See docs/DRIVE_INGESTION.md ("Setting up credentials") for how to get a
 client secret file, and "Adding another user" in the README for what a
 second person needs (their own token, same client secret file).
+
+If your token.json predates sync_qbo_transactions.py, it won't have the
+Sheets scope below -- delete it and rerun this script. Google won't
+silently upgrade an existing token's scope.
 """
 
 from __future__ import annotations
@@ -27,7 +32,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
 
 
 def main() -> int:
@@ -47,7 +55,7 @@ def main() -> int:
 
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    flow = InstalledAppFlow.from_client_secrets_file(args.client_secret, scopes=DRIVE_SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(args.client_secret, scopes=SCOPES)
     credentials = flow.run_local_server(port=0)
 
     with open(args.out, "w") as f:
