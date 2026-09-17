@@ -43,6 +43,12 @@ Not built yet, in planned order:
    check reads `OK`, matching the workbook's own rule: "if one does not
    [read zero], the number below it is wrong — do not send the file."
 
+Until that exists, populating `1 TRANSACTIONS` / `2 FREIGHT` from a QBO
+report + that year's filed invoices is a manual process done with a
+fresh Claude session each time — see
+[`docs/QBO_EXTRACTION_SOP.md`](docs/QBO_EXTRACTION_SOP.md) for the
+prompt and method.
+
 ## Layout
 
 ```
@@ -55,6 +61,8 @@ scripts/                  # runnable entry points:
                            #   process_inbox.py        (guess + file Inbox contents)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
 docs/DRIVE_INGESTION.md   # Drive folder layout + credential setup
+docs/QBO_EXTRACTION_SOP.md # manual SOP + prompt for populating
+                           # 1 TRANSACTIONS / 2 FREIGHT from a QBO report
 tests/                    # tests, several checked against real numbers /
                            # filenames / invoice text from the source
                            # workbook and Drive
