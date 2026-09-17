@@ -8,7 +8,7 @@ spreadsheet -- see docs/DRIVE_INGESTION.md for the full picture of what
 this step does and doesn't do yet.
 
 Usage:
-    python scripts/ingest_drive_folder.py <root_folder_id> --credentials token.json
+    python3 scripts/ingest_drive_folder.py <root_folder_id> --credentials token.json
 
 See docs/DRIVE_INGESTION.md for how to get a root folder ID and a
 credentials file.

@@ -170,7 +170,7 @@ service-account email, which is more setup for no benefit here):
 
    ```
    pip install -e ".[drive]"
-   python scripts/get_token.py client_secret_<id>.json
+   python3 scripts/get_token.py client_secret_<id>.json
    ```
 
    This opens a browser, asks you to sign in as the account the folder is
@@ -203,20 +203,20 @@ service-account email, which is more setup for no benefit here):
 Report on the three category folders (read-only, always):
 
 ```
-python scripts/ingest_drive_folder.py <root_folder_id> --credentials token.json
+python3 scripts/ingest_drive_folder.py <root_folder_id> --credentials token.json
 ```
 
 Process the Inbox -- dry run by default, prints what it *would* do:
 
 ```
-python scripts/process_inbox.py <root_folder_id> --credentials token.json
+python3 scripts/process_inbox.py <root_folder_id> --credentials token.json
 ```
 
 Add `--apply` once you've checked the dry-run output and are ready to let
 it actually rename and move files:
 
 ```
-python scripts/process_inbox.py <root_folder_id> --credentials token.json --apply
+python3 scripts/process_inbox.py <root_folder_id> --credentials token.json --apply
 ```
 
 Both exit non-zero if anything needs a look.
@@ -227,8 +227,8 @@ and doesn't cover, and where a Claude session still has to fill in the
 rest:
 
 ```
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
-python scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> --credentials token.json --apply
+python3 scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
+python3 scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
 Sync the Overhead invoice register into `1 TRANSACTIONS` Section E, and
@@ -236,8 +236,8 @@ backfill Section A's Invoice # for matched payments -- run this after
 Section A is synced:
 
 ```
-python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
-python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
+python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
+python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
 All exit non-zero if anything needs a look (`sync_qbo_transactions.py`:
