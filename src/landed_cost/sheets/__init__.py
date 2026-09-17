@@ -7,6 +7,18 @@ Sheets API, and only code that actually writes to a live sheet needs it
 installed.
 """
 
+from .overhead_register import (
+    OverheadRegisterRow,
+    build_overhead_register_rows,
+    extract_overhead_amount,
+)
+from .overhead_sync import (
+    SectionATransaction,
+    match_section_a_row,
+    read_existing_e_register,
+    read_section_a_rows,
+    sync_overhead_register,
+)
 from .qbo import (
     QboTransaction,
     SectionARow,
@@ -19,13 +31,21 @@ from .qbo import (
 from .sync import read_existing_section_a, sync_section_a
 
 __all__ = [
+    "OverheadRegisterRow",
     "QboTransaction",
     "SectionARow",
+    "SectionATransaction",
+    "build_overhead_register_rows",
     "classify_category",
     "clean_payee",
+    "extract_overhead_amount",
+    "match_section_a_row",
     "merge_qbo_csv_texts",
     "parse_qbo_quickreport_csv",
     "plan_section_a_sync",
+    "read_existing_e_register",
     "read_existing_section_a",
+    "read_section_a_rows",
+    "sync_overhead_register",
     "sync_section_a",
 ]

@@ -231,15 +231,26 @@ python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id
 python scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
-All three exit non-zero if anything needs a look (`sync_qbo_transactions.py`
-specifically: any new row with a blank Category).
+Sync the Overhead invoice register into `1 TRANSACTIONS` Section E, and
+backfill Section A's Invoice # for matched payments -- run this after
+Section A is synced:
+
+```
+python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
+python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
+```
+
+All exit non-zero if anything needs a look (`sync_qbo_transactions.py`:
+any new row with a blank Category; `sync_overhead_register.py`: any row
+with a blank Overhead $, or a Section A payment it couldn't confidently
+match).
 
 ## What's next
 
-Per the main README roadmap: wiring the confidently-extracted fields
-(freight, overhead) into populated `FreightInvoiceRegister` / etc. rows
-(Sections C/D/E -- `sync_qbo_transactions.py` only covers Section A), and
-the `ControlCheck` gate before anything is called final. Components will
-keep needing a human to type the invoice number even after that, per the
-"never auto-file" design above -- worth watching whether that's still
-true once there's more real component-invoice text to learn from.
+Per the main README roadmap: the same register sync for Sections C
+(Components) and D (Freight/Bundling) -- `sync_overhead_register.py`
+only covers Section E so far -- and the `ControlCheck` gate before
+anything is called final. Components will keep needing a human to type
+the invoice number even after that, per the "never auto-file" design
+above -- worth watching whether that's still true once there's more real
+component-invoice text to learn from.
