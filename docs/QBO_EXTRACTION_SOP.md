@@ -86,6 +86,16 @@ invoice (fill in by hand); any Section A backfill flagged "ambiguous" or
 "no matching" means it couldn't confidently place that payment (also fill
 in by hand). Everything else backfills automatically.
 
+Section E's row is found automatically by searching for its own
+"OVERHEAD INVOICE REGISTER" title in the sheet, not a fixed row number —
+its position shifts every time anything above it grows, so a hardcoded
+number would eventually go stale (a real incident: 2026-09-17, a stale
+row number silently wrote a run's Section E rows into what had become
+Section A's own territory instead — see the git history if you want the
+full story). The detected row is also verified (must actually read
+"Invoice #") before anything is written; if that check fails, the script
+refuses to run rather than guess.
+
 Same insert-at-last-row-so-formulas-auto-extend behavior as Section A
 (see Step 1), and the same `--sort` opt-in — pass it to re-sort the whole
 Section E range by Paid date after writing:

@@ -28,9 +28,15 @@ from .qbo import (
     parse_qbo_quickreport_csv,
     plan_section_a_sync,
 )
+from .section_headers import (
+    SECTION_E_TITLE_PATTERN,
+    find_section_data_start_row,
+    verify_column_header,
+)
 from .sync import read_existing_section_a, sync_section_a
 
 __all__ = [
+    "SECTION_E_TITLE_PATTERN",
     "OverheadRegisterRow",
     "QboTransaction",
     "SectionARow",
@@ -39,6 +45,7 @@ __all__ = [
     "classify_category",
     "clean_payee",
     "extract_overhead_amount",
+    "find_section_data_start_row",
     "match_section_a_row",
     "merge_qbo_csv_texts",
     "parse_qbo_quickreport_csv",
@@ -48,4 +55,5 @@ __all__ = [
     "read_section_a_rows",
     "sync_overhead_register",
     "sync_section_a",
+    "verify_column_header",
 ]
