@@ -240,16 +240,28 @@ python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> 
 python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
+Sync the Freight invoice register into `1 TRANSACTIONS` Section D, and
+backfill Section A's Invoice # for matched payments -- also run this
+after Section A is synced:
+
+```
+python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --credentials token.json
+python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --credentials token.json --prep-sheet-folder-id <prep_folder_id> --apply
+```
+
 All exit non-zero if anything needs a look (`sync_qbo_transactions.py`:
 any new row with a blank Category; `sync_overhead_register.py`: any row
 with a blank Overhead $, or a Section A payment it couldn't confidently
-match).
+match; `sync_freight_register.py`: any row with blank amounts, a
+payment-amount mismatch, an unresolved Prep sheet link, or a Section A
+payment it couldn't confidently match).
 
 ## What's next
 
-Per the main README roadmap: the same register sync for Sections C
-(Components) and D (Freight/Bundling) -- `sync_overhead_register.py`
-only covers Section E so far -- and the `ControlCheck` gate before
+Per the main README roadmap: the same register sync for Section C
+(Components) -- Components' vendor invoice formats are inconsistent
+enough that its amount extraction will need to be flagged for review
+rather than trusted automatically -- and the `ControlCheck` gate before
 anything is called final. Components will keep needing a human to type
 the invoice number even after that, per the "never auto-file" design
 above -- worth watching whether that's still true once there's more real
