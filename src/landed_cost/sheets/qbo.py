@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 from datetime import date as date_cls
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -37,8 +36,6 @@ from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel, ConfigDict
 
 from ..models.enums import Category
-
-_TRN_RE = re.compile(r"TRN#\s*([A-Z0-9]+)")
 
 
 class QboTransaction(BaseModel):
@@ -59,12 +56,14 @@ class SectionARow(BaseModel):
     ``QboTransaction``.
 
     Deliberately looser than ``InventoryTransaction`` (the model for a
-    trusted, final row): ``category`` can be ``None`` and
-    ``invoice_number`` is only ever a best-effort bank reference, not a
-    real vendor invoice number -- that still needs the invoice PDFs (see
-    the module docstring). ``flagged`` is True whenever something here
-    needs a human look before being trusted -- an unclassified vendor,
-    or a QBO reference this parser couldn't turn into anything.
+    trusted, final row): ``category`` can be ``None``, and
+    ``invoice_number`` is always ``""`` here -- it matches to the real
+    vendor invoice/payment confirmation, which needs the invoice PDFs
+    read and reconciled (see the module docstring and
+    docs/QBO_EXTRACTION_SOP.md Step 2), not a QBO wire reference used as
+    a stand-in. ``flagged`` is True whenever something here needs a
+    human look before being trusted -- currently just an unclassified
+    vendor.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -180,21 +179,9 @@ def clean_payee(name: str, description: str, category: Category | None) -> str:
     return name or description[:60]
 
 
-def extract_reference(description: str) -> str:
-    """Pull the bank's own wire transaction reference (``TRN#...``) out
-    of the memo text, if present. This is NOT the vendor's invoice
-    number -- it's just a stable, unique-ish identifier so the row is
-    traceable back to its bank record until a human (or the
-    docs/QBO_EXTRACTION_SOP.md process) matches it to a real invoice.
-    """
-    match = _TRN_RE.search(description)
-    return f"TRN{match.group(1)}" if match else ""
-
-
 def build_section_a_row(txn: QboTransaction) -> SectionARow:
     category = classify_category(txn.name, txn.description)
     payee = clean_payee(txn.name, txn.description, category)
-    invoice_number = extract_reference(txn.description)
     flagged = category is None
     flag_reason = (
         "vendor not recognized as Freight/Components/Overhead -- category left blank, needs your input"
@@ -205,7 +192,12 @@ def build_section_a_row(txn: QboTransaction) -> SectionARow:
         category=category,
         date=txn.date,
         payee=payee,
-        invoice_number=invoice_number,
+        # Always blank -- the Invoice # column matches to the real
+        # vendor invoice/payment confirmation, which needs the invoice
+        # PDFs read and reconciled (docs/QBO_EXTRACTION_SOP.md Step 2).
+        # This script never guesses at it, not even with a bank
+        # reference number as a placeholder.
+        invoice_number="",
         amount=txn.amount,
         flagged=flagged,
         flag_reason=flag_reason,

@@ -61,3 +61,39 @@ class GoogleSheetsClient:
             valueInputOption="USER_ENTERED",
             body={"values": values},
         ).execute()
+
+    def get_sheet_id(self, spreadsheet_id: str, sheet_name: str) -> int:
+        response = (
+            self._service.spreadsheets()
+            .get(spreadsheetId=spreadsheet_id, fields="sheets.properties(sheetId,title)")
+            .execute()
+        )
+        for sheet in response.get("sheets", []):
+            if sheet["properties"]["title"] == sheet_name:
+                return sheet["properties"]["sheetId"]
+        raise ValueError(f"no sheet tab named {sheet_name!r} found in spreadsheet {spreadsheet_id!r}")
+
+    def insert_rows(self, spreadsheet_id: str, sheet_id: int, start_row: int, num_rows: int) -> None:
+        start_index = start_row - 1  # Sheets API GridRange is 0-indexed
+        end_index = start_index + num_rows
+        body = {
+            "requests": [
+                {
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": start_index,
+                            "endIndex": end_index,
+                        },
+                        # Copies the cell formatting of the row directly above
+                        # the insertion point onto the new rows -- same as
+                        # "Insert row above" in the Sheets UI. Requires
+                        # startIndex > 0, always true here (Section A never
+                        # starts at row 1).
+                        "inheritFromBefore": start_index > 0,
+                    }
+                }
+            ]
+        }
+        self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()

@@ -122,14 +122,14 @@ def main() -> int:
     print(f"Parsed {len(transactions)} QBO transactions.")
     print(f"{len(skipped)} already present in the sheet (same date + amount), skipped.")
     print(f"{len(new_rows)} new row(s){' to write' if not args.apply else ' written'}, "
-          f"starting at row {first_write_row}:\n")
+          f"starting at row {first_write_row} (Invoice # left blank -- filled in during "
+          f"invoice reconciliation, see docs/QBO_EXTRACTION_SOP.md Step 2):\n")
 
     flagged_count = 0
     for row in new_rows:
         marker = "  ! " if row.flagged else "    "
         category = row.category.value if row.category is not None else "(blank)"
-        print(f"{marker}{row.date} | {category:<32} | {row.payee:<28} | "
-              f"{row.invoice_number or '(no ref)':<12} | {row.amount}")
+        print(f"{marker}{row.date} | {category:<32} | {row.payee:<28} | {row.amount}")
         if row.flagged:
             flagged_count += 1
             print(f"      -> {row.flag_reason}")

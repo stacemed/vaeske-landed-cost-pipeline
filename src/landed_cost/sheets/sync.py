@@ -109,6 +109,16 @@ def sync_section_a(
     new_rows, skipped = plan_section_a_sync(transactions, existing)
 
     if apply and new_rows:
+        # Insert first, THEN write -- never overwrite a fixed range
+        # directly. Section A shares its sheet with other sections
+        # below it, separated by only a couple of blank buffer rows;
+        # a plain overwrite is safe only by luck (only as many new
+        # rows as there happen to be buffer rows). Inserting shifts
+        # everything below down first, so new rows are always
+        # genuinely blank no matter how many there are -- see
+        # SheetsClient.insert_rows.
+        sheet_id = client.get_sheet_id(spreadsheet_id, sheet_name)
+        client.insert_rows(spreadsheet_id, sheet_id, first_empty_row, len(new_rows))
         last_row = first_empty_row + len(new_rows) - 1
         values = [_row_to_values(row) for row in new_rows]
         client.update_values(spreadsheet_id, f"'{sheet_name}'!A{first_empty_row}:E{last_row}", values)
