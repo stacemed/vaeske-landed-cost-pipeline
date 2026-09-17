@@ -106,6 +106,7 @@ class GoogleSheetsClient:
         end_row: int,
         sort_column_index: int,
         ascending: bool = True,
+        num_columns: int = 5,
     ) -> None:
         body = {
             "requests": [
@@ -116,7 +117,7 @@ class GoogleSheetsClient:
                             "startRowIndex": start_row - 1,  # 0-indexed
                             "endRowIndex": end_row,  # exclusive, so inclusive end_row works as-is
                             "startColumnIndex": 0,
-                            "endColumnIndex": 5,  # A:E -- Section A's fixed column count
+                            "endColumnIndex": num_columns,  # A:E by default (Section A); pass the caller's own column count otherwise
                         },
                         "sortSpecs": [
                             {

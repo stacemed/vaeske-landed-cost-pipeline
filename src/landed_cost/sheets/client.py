@@ -68,9 +68,17 @@ class SheetsClient(Protocol):
         end_row: int,
         sort_column_index: int,
         ascending: bool = True,
+        num_columns: int = 5,
     ) -> None:
         """Sort rows ``start_row..end_row`` (1-indexed, inclusive) by
         the given 0-indexed column within that row (0 = column A).
+
+        ``num_columns`` bounds the sorted range to columns A through
+        however many that section actually has -- default 5 (A:E)
+        matches Section A; a section with a different column count
+        (e.g. Section E's 6, A:F) must pass its own, or a native sort
+        would silently leave that section's last column behind while
+        every other column moves with the sort.
 
         Uses the Sheets API's native sort-range operation (the same
         one "Data > Sort range" runs in the UI), not a read-then-

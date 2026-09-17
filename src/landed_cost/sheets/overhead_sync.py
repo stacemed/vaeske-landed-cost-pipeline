@@ -155,6 +155,7 @@ def sync_overhead_register(
     section_a_start_row: int,
     register_rows: list[OverheadRegisterRow],
     apply: bool,
+    sort: bool = False,
 ) -> tuple[
     list[OverheadRegisterRow],
     list[tuple[int, OverheadRegisterRow]],
@@ -169,6 +170,17 @@ def sync_overhead_register(
     overwrite of that row's cells -- not a diff/patch -- which is what
     correctly picks up e.g. a payment confirmation that gets filed after
     its invoice was already registered on its own.
+
+    ``sort``, only meaningful together with ``apply`` and only when
+    there are new rows to insert, sorts the whole Section E range by
+    Paid date (ascending) after writing -- same opt-in native-sort
+    behavior as Section A's ``sync_section_a``, but by Paid date
+    (column C) rather than Invoice date (column B), since Paid date is
+    the field this module already treats as the reliable one (it's
+    what the Section A backfill matches on, and what falls back to the
+    invoice's own date when no payment confirmation is filed). Passes
+    ``num_columns=6`` to cover Section E's full A:F range -- Section
+    A's 5-column default would leave the Payment Link column behind.
 
     Returns ``(new_rows, updated_rows, section_a_backfills)`` where
     ``updated_rows`` is ``(row_number, register_row)`` pairs and
@@ -218,6 +230,18 @@ def sync_overhead_register(
             last_row = insert_at + len(new_rows) - 1
             values = [_row_to_e_values(r) for r in new_rows]
             client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:F{last_row}", values)
+
+            if sort:
+                # Sort the WHOLE section, not just the new rows -- same
+                # reasoning as sync_section_a: new rows landed above the
+                # old last row (see insert_at above), so the unsorted
+                # section spans section_e_start_row through the new end
+                # of data regardless of where the new rows themselves sit.
+                new_last_row = first_empty_row + len(new_rows) - 1
+                client.sort_range(
+                    spreadsheet_id, sheet_id, section_e_start_row, new_last_row,
+                    sort_column_index=2, num_columns=6,
+                )
 
         for row, match_row, _status in section_a_backfills:
             if match_row is not None:
