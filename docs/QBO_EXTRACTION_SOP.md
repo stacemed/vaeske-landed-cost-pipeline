@@ -32,8 +32,8 @@ You have:
 ## Step 1 — sync Section A (no Claude needed)
 
 ```
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply
+python3 scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
+python3 scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply
 ```
 
 Or, if you'd rather drop the export in Drive than keep it on your
@@ -68,14 +68,14 @@ old position. Opt-in, not automatic, since reordering a live financial
 ledger is a real choice:
 
 ```
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply --sort
+python3 scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply --sort
 ```
 
 ## Step 2 — sync Section E (no Claude needed)
 
 ```
-python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
-python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
+python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json
+python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
 `<overhead_folder_id>` is the Drive folder ID of "Invoices - Overhead"
@@ -91,7 +91,7 @@ Same insert-at-last-row-so-formulas-auto-extend behavior as Section A
 Section E range by Paid date after writing:
 
 ```
-python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply --sort
+python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply --sort
 ```
 
 ## Step 3 — the remaining invoice registers (Claude session)

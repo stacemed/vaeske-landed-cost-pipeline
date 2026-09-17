@@ -27,9 +27,9 @@ Without --apply this only prints what it *would* write; nothing on the
 sheet changes.
 
 Usage:
-    python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> \\
+    python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> \\
         --credentials token.json
-    python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> \\
+    python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> \\
         --credentials token.json --apply
 
 See docs/DRIVE_INGESTION.md for how to get a spreadsheet ID and a

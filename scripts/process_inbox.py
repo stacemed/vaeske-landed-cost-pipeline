@@ -14,8 +14,8 @@ way never marks a document ready to file either, since OCR misreads
 characters.
 
 Usage:
-    python scripts/process_inbox.py <root_folder_id> --credentials token.json
-    python scripts/process_inbox.py <root_folder_id> --credentials token.json --apply
+    python3 scripts/process_inbox.py <root_folder_id> --credentials token.json
+    python3 scripts/process_inbox.py <root_folder_id> --credentials token.json --apply
 
 See docs/DRIVE_INGESTION.md for folder layout and credential setup.
 """

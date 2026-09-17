@@ -15,8 +15,8 @@ Needs the optional `drive` dependency group:
     pip install -e ".[drive]"
 
 Usage:
-    python scripts/get_token.py client_secret_<id>.json
-    python scripts/get_token.py client_secret_<id>.json --out token.json
+    python3 scripts/get_token.py client_secret_<id>.json
+    python3 scripts/get_token.py client_secret_<id>.json --out token.json
 
 See docs/DRIVE_INGESTION.md ("Setting up credentials") for how to get a
 client secret file, and "Adding another user" in the README for what a

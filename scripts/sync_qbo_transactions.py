@@ -20,9 +20,9 @@ downloaded, never moved or deleted, since the (date, amount) dedup
 already makes re-processing the same export a no-op.
 
 Usage:
-    python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> \\
+    python3 scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> \\
         --credentials token.json
-    python scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> \\
+    python3 scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> \\
         --credentials token.json --apply
 
 See docs/DRIVE_INGESTION.md for how to get a spreadsheet ID and a
