@@ -16,6 +16,7 @@ class FakeSheetsClient:
     def __init__(self, rows: dict[int, list[object]]):
         self._rows = dict(rows)
         self.updates: list[tuple[str, list[list[object]]]] = []
+        self.inserts: list[tuple[int, int]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
         start_row, end_row = _parse_row_range(a1_range)
@@ -31,6 +32,16 @@ class FakeSheetsClient:
         for i, row in enumerate(values):
             self._rows[start_row + i] = row
         self.updates.append((a1_range, values))
+
+    def get_sheet_id(self, spreadsheet_id: str, sheet_name: str) -> int:
+        return 12345  # tests don't care about the real GID
+
+    def insert_rows(self, spreadsheet_id: str, sheet_id: int, start_row: int, num_rows: int) -> None:
+        self.inserts.append((start_row, num_rows))
+        # Shift every row at/after start_row down by num_rows -- highest
+        # row number first so nothing gets clobbered mid-shift.
+        for row_number in sorted((r for r in self._rows if r >= start_row), reverse=True):
+            self._rows[row_number + num_rows] = self._rows.pop(row_number)
 
 
 def _parse_row_range(a1_range: str) -> tuple[int, int]:
@@ -98,11 +109,50 @@ def test_sync_section_a_apply_writes_new_rows_after_existing_data():
     assert len(skipped) == 1
     assert len(new_rows) == 1
     assert first_write_row == 7
+    assert client.inserts == [(7, 1)]  # inserted before writing, not overwritten in place
     assert client.updates == [
         ("'1 TRANSACTIONS'!A7:E7", [["Freight / bundling / packaging", "01/16/2024", "FBA Bee", "", 990.04]])
     ]
     # row was actually appended into the fake sheet's row 7
     assert client._rows[7][1] == "01/16/2024"
+
+
+def test_sync_section_a_apply_inserts_rows_instead_of_overwriting_what_follows():
+    # Real bug (2026-09-17): a plain overwrite of a fixed range only
+    # avoided clobbering Section B by luck -- exactly as many new
+    # transactions as there happened to be blank buffer rows. With
+    # more new rows than buffer rows, a plain overwrite would have
+    # written directly over "B · BY CATEGORY" and real Components data
+    # below it. Inserting first must shift all of that down instead.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-08", "Weimin Huang", "", 399.0],
+        7: ["", "", "", "", ""],   # blank buffer row 1
+        8: ["", "", "", "", ""],   # blank buffer row 2
+        9: ["B · BY CATEGORY -- each ties to a sheet", "", "", "", ""],
+        10: ["Category", "Txns", "Cash paid $", "Built up on", "Built-up total $"],
+        11: ["Components", 14, 154936.36, "3 COMPONENTS", 154798.17],
+    })
+    transactions = [
+        QboTransaction(date=date(2024, 1, 9), name="", description="Shenzhen Linkhub", amount=Decimal("100.00")),
+        QboTransaction(date=date(2024, 1, 10), name="", description="Shenzhen Linkhub", amount=Decimal("200.00")),
+        QboTransaction(date=date(2024, 1, 11), name="", description="Shenzhen Linkhub", amount=Decimal("300.00")),
+        QboTransaction(date=date(2024, 1, 12), name="", description="Shenzhen Linkhub", amount=Decimal("400.00")),
+    ]  # 4 new transactions -- more than the 2-row blank buffer
+
+    new_rows, skipped, first_write_row = sync_section_a(
+        client, "sheet1", "1 TRANSACTIONS", start_row=6, transactions=transactions, apply=True
+    )
+
+    assert len(new_rows) == 4
+    assert first_write_row == 7
+    assert client.inserts == [(7, 4)]
+    # Section B's header and its data must be intact, shifted down by 4
+    # (row 9 -> 13, row 11 -> 15) -- never overwritten.
+    assert client._rows[13][0] == "B · BY CATEGORY -- each ties to a sheet"
+    assert client._rows[15][0] == "Components"
+    # the new transaction rows landed in the freshly-inserted space
+    assert client._rows[7][1] == "01/09/2024"
+    assert client._rows[10][1] == "01/12/2024"
 
 
 def test_sync_section_a_flags_unclassified_vendor_but_still_writes_it():

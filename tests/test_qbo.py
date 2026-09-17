@@ -7,7 +7,6 @@ from landed_cost.sheets.qbo import (
     build_section_a_row,
     classify_category,
     clean_payee,
-    extract_reference,
     merge_qbo_csv_texts,
     parse_qbo_quickreport_csv,
     plan_section_a_sync,
@@ -97,14 +96,6 @@ def test_clean_payee_falls_back_to_raw_text_when_unclassified():
     assert clean_payee("Aco Mexico", "ACO MEX APTO T1 URBAN", None) == "Aco Mexico"
 
 
-def test_extract_reference_pulls_trn_number():
-    assert extract_reference("... TRN#XXXXXXXX2548 ...") == "TRNXXXXXXXX2548"
-
-
-def test_extract_reference_blank_when_not_found():
-    assert extract_reference("Sent WEIMIN HUANG") == ""
-
-
 def test_build_section_a_row_flags_unclassified_vendor():
     txn = QboTransaction(date=date(2024, 7, 25), name="Aco Mexico", description="ACO MEX APTO T1 URBAN", amount=Decimal("5.86"))
     row = build_section_a_row(txn)
@@ -120,6 +111,24 @@ def test_build_section_a_row_not_flagged_for_recognized_vendor():
 
     assert row.category is Category.FREIGHT_BUNDLING_PACKAGING
     assert row.flagged is False
+
+
+def test_build_section_a_row_invoice_number_is_always_blank():
+    # Invoice # matches to the real vendor invoice/payment confirmation
+    # -- that needs the invoice PDFs reconciled (SOP Step 2), so this
+    # script must never fill it in, not even with a bank wire reference
+    # as a placeholder (a real mistake caught in review: a QBO
+    # "TRN#..." reference was being written there, which isn't a real
+    # invoice number and would be confused for one).
+    txn = QboTransaction(
+        date=date(2024, 1, 8),
+        name="",
+        description="WT ... BNF=Shenzhen Minzhi BYJ Trading Company ... TRN#XXXXXXXX2548 ...",
+        amount=Decimal("16948.60"),
+    )
+    row = build_section_a_row(txn)
+
+    assert row.invoice_number == ""
 
 
 def test_plan_section_a_sync_skips_existing_date_amount_pairs():
