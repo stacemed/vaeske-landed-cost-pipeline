@@ -97,6 +97,14 @@ def main() -> int:
         action="store_true",
         help="Actually write new rows to the sheet. Without this, only prints what it would write.",
     )
+    parser.add_argument(
+        "--sort",
+        action="store_true",
+        help="After writing, sort the whole Section A range by Date (ascending). Only takes "
+        "effect together with --apply. Opt-in, not automatic -- new rows land just above the "
+        "previous last row rather than strictly at the bottom (see docs/QBO_EXTRACTION_SOP.md), "
+        "so pass this if you want the sheet re-sorted chronologically after every run.",
+    )
     args = parser.parse_args()
 
     if args.qbo_csv:
@@ -117,6 +125,7 @@ def main() -> int:
         args.start_row,
         transactions,
         apply=args.apply,
+        sort=args.sort,
     )
 
     print(f"Parsed {len(transactions)} QBO transactions.")
@@ -137,6 +146,9 @@ def main() -> int:
     if flagged_count:
         print(f"\n{flagged_count} row(s) have a blank Category -- fill these in by hand "
               f"before trusting 8 CONTROL's totals.")
+
+    if args.apply and args.sort and new_rows:
+        print(f"\nSorted the whole Section A range (rows {args.start_row}-{first_write_row + len(new_rows) - 1}) by Date.")
 
     if not args.apply and new_rows:
         print("\nDry run only -- pass --apply to actually write these rows.")

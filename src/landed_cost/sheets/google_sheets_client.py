@@ -97,3 +97,35 @@ class GoogleSheetsClient:
             ]
         }
         self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+
+    def sort_range(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        start_row: int,
+        end_row: int,
+        sort_column_index: int,
+        ascending: bool = True,
+    ) -> None:
+        body = {
+            "requests": [
+                {
+                    "sortRange": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": start_row - 1,  # 0-indexed
+                            "endRowIndex": end_row,  # exclusive, so inclusive end_row works as-is
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 5,  # A:E -- Section A's fixed column count
+                        },
+                        "sortSpecs": [
+                            {
+                                "dimensionIndex": sort_column_index,
+                                "sortOrder": "ASCENDING" if ascending else "DESCENDING",
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+        self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()

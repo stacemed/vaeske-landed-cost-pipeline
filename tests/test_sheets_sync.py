@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from landed_cost.models import Category
 from landed_cost.sheets.qbo import QboTransaction
-from landed_cost.sheets.sync import read_existing_section_a, sync_section_a
+from landed_cost.sheets.sync import _parse_cell_date, read_existing_section_a, sync_section_a
 
 
 class FakeSheetsClient:
@@ -17,6 +17,7 @@ class FakeSheetsClient:
         self._rows = dict(rows)
         self.updates: list[tuple[str, list[list[object]]]] = []
         self.inserts: list[tuple[int, int]] = []
+        self.sorts: list[tuple[int, int, int, bool]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
         start_row, end_row = _parse_row_range(a1_range)
@@ -42,6 +43,19 @@ class FakeSheetsClient:
         # row number first so nothing gets clobbered mid-shift.
         for row_number in sorted((r for r in self._rows if r >= start_row), reverse=True):
             self._rows[row_number + num_rows] = self._rows.pop(row_number)
+
+    def sort_range(
+        self, spreadsheet_id: str, sheet_id: int, start_row: int, end_row: int,
+        sort_column_index: int, ascending: bool = True,
+    ) -> None:
+        self.sorts.append((start_row, end_row, sort_column_index, ascending))
+        rows_in_range = [self._rows[r] for r in range(start_row, end_row + 1) if r in self._rows]
+        rows_in_range.sort(
+            key=lambda row: _parse_cell_date(row[sort_column_index]) if len(row) > sort_column_index else None,
+            reverse=not ascending,
+        )
+        for i, row in enumerate(rows_in_range):
+            self._rows[start_row + i] = row
 
 
 def _parse_row_range(a1_range: str) -> tuple[int, int]:
@@ -162,6 +176,43 @@ def test_sync_section_a_apply_inserts_rows_instead_of_overwriting_what_follows()
     assert client._rows[6][1] == "01/09/2024"
     assert client._rows[9][1] == "01/12/2024"
     assert client._rows[10][1] == "2024-01-08"
+
+
+def test_sync_section_a_without_sort_leaves_new_row_out_of_chronological_order():
+    # Documents the trade-off sort=True fixes: new rows land just above
+    # the previous last row (see insert_at in sync_section_a), so a
+    # later-dated new transaction ends up ABOVE an earlier existing one.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-05", "Weimin Huang", "", 100.0],
+    })
+    transactions = [
+        QboTransaction(date=date(2024, 3, 1), name="", description="Shenzhen Linkhub", amount=Decimal("50.00")),
+    ]
+
+    sync_section_a(
+        client, "sheet1", "1 TRANSACTIONS", start_row=6, transactions=transactions, apply=True, sort=False
+    )
+
+    assert client.sorts == []
+    assert client._rows[6][1] == "03/01/2024"  # newer transaction on top
+    assert client._rows[7][1] == "2024-01-05"  # older one pushed below it
+
+
+def test_sync_section_a_with_sort_restores_chronological_order():
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-05", "Weimin Huang", "", 100.0],
+    })
+    transactions = [
+        QboTransaction(date=date(2024, 3, 1), name="", description="Shenzhen Linkhub", amount=Decimal("50.00")),
+    ]
+
+    sync_section_a(
+        client, "sheet1", "1 TRANSACTIONS", start_row=6, transactions=transactions, apply=True, sort=True
+    )
+
+    assert client.sorts == [(6, 7, 1, True)]  # column index 1 = Date, ascending
+    assert client._rows[6][1] == "2024-01-05"  # earlier date now first
+    assert client._rows[7][1] == "03/01/2024"  # later date now second
 
 
 def test_sync_section_a_flags_unclassified_vendor_but_still_writes_it():

@@ -97,9 +97,18 @@ def sync_section_a(
     start_row: int,
     transactions: list[QboTransaction],
     apply: bool,
+    sort: bool = False,
 ) -> tuple[list[SectionARow], list[QboTransaction], int]:
     """Plan (and, only if ``apply``, write) new Section A rows for every
     QBO transaction not already present.
+
+    ``sort``, only meaningful together with ``apply``, sorts the whole
+    Section A range by Date (ascending) after writing -- opt-in, not
+    automatic, since it's a live financial ledger and reordering it is
+    a real choice, not a side effect a caller should get for free. Uses
+    a real Sheets range sort (SheetsClient.sort_range), not a
+    read-sorted-values-then-rewrite, so per-row formatting moves with
+    its data instead of staying stuck at the old row position.
 
     Returns ``(new_rows, skipped_as_duplicate, first_write_row)`` --
     the caller (the CLI) decides how to report this; nothing is written
@@ -139,5 +148,16 @@ def sync_section_a(
         last_row = insert_at + len(new_rows) - 1
         values = [_row_to_values(row) for row in new_rows]
         client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:E{last_row}", values)
+
+        if sort:
+            # Sort the WHOLE section, not just the new rows -- new
+            # rows landed above the old last row (see insert_at above),
+            # so the unsorted section spans start_row through the new
+            # end of data regardless of where the new rows themselves
+            # sit.
+            new_last_row = first_empty_row + len(new_rows) - 1
+            client.sort_range(
+                spreadsheet_id, sheet_id, start_row, new_last_row, sort_column_index=1
+            )
 
     return new_rows, skipped, insert_at
