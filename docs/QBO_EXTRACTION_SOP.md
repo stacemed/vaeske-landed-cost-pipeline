@@ -42,6 +42,17 @@ hand in the Sheet before trusting `8 CONTROL`'s totals; the script never
 guesses a category (see its docstring for the exact vendor patterns it
 knows).
 
+New rows are inserted at the last existing data row (pushing it down),
+not appended one row past it -- that's deliberate, so any formula whose
+range already ends there (a Section A TOTAL's `SUM`, Section B's
+`SUMIF`/`COUNTIF`) auto-extends to include the new rows the same way
+Sheets extends a range when you insert a row by hand. No formula edits
+needed going forward. If your sheet already has appended rows from
+before this behavior existed, those formulas are still frozen at their
+old boundary -- fix each one by hand once (extend the range to the
+sheet's current last data row) and it'll keep auto-extending from then
+on.
+
 ## Step 2 — the invoice registers (Claude session)
 
 ## What this covers

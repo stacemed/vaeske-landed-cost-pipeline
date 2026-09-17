@@ -108,6 +108,23 @@ def sync_section_a(
     existing, first_empty_row = read_existing_section_a(client, spreadsheet_id, sheet_name, start_row)
     new_rows, skipped = plan_section_a_sync(transactions, existing)
 
+    # Insert AT the last existing data row (not one past it), so the
+    # old last row gets pushed down rather than the new rows landing
+    # after everything. Deliberate, not off-by-one: Sheets only
+    # auto-extends an existing formula's range (a Section A TOTAL's
+    # SUM, or Section B's SUMIF/COUNTIF) when an insertion falls at or
+    # within the range it already covers -- inserting one row past the
+    # end never extends it, which is exactly the gap a real run hit (a
+    # SUM(E5:E50) stayed frozen at row 50 after new rows landed at
+    # 51-52). Inserting at row 50 itself keeps every such formula
+    # correct with zero manual edits, at the cost of new rows landing
+    # just above the previous last row instead of strictly at the
+    # bottom -- fine, since nothing here depends on row order (the
+    # dedup check does a full re-read every run regardless of
+    # position). Computed even on a dry run so the reported row number
+    # matches what --apply will actually do.
+    insert_at = first_empty_row - 1 if first_empty_row > start_row else start_row
+
     if apply and new_rows:
         # Insert first, THEN write -- never overwrite a fixed range
         # directly. Section A shares its sheet with other sections
@@ -118,9 +135,9 @@ def sync_section_a(
         # genuinely blank no matter how many there are -- see
         # SheetsClient.insert_rows.
         sheet_id = client.get_sheet_id(spreadsheet_id, sheet_name)
-        client.insert_rows(spreadsheet_id, sheet_id, first_empty_row, len(new_rows))
-        last_row = first_empty_row + len(new_rows) - 1
+        client.insert_rows(spreadsheet_id, sheet_id, insert_at, len(new_rows))
+        last_row = insert_at + len(new_rows) - 1
         values = [_row_to_values(row) for row in new_rows]
-        client.update_values(spreadsheet_id, f"'{sheet_name}'!A{first_empty_row}:E{last_row}", values)
+        client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:E{last_row}", values)
 
-    return new_rows, skipped, first_empty_row
+    return new_rows, skipped, insert_at
