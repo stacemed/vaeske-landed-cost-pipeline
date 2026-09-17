@@ -1,6 +1,6 @@
 # SOP: Populating 1 TRANSACTIONS / 2 FREIGHT from a QBO report
 
-Three pieces, two automated, one not:
+Four pieces, three automated, one not:
 
 - **`1 TRANSACTIONS` Section A** (the QBO ledger itself) is now handled
   by real code — `scripts/sync_qbo_transactions.py`. No Claude session
@@ -10,7 +10,11 @@ Three pieces, two automated, one not:
   filed document in "Invoices - Overhead", upserts Section E, and
   backfills Section A's Invoice # column for matched payments. No Claude
   session needed for this part either.
-- **Everything else** (Sections C/D's invoice registers, and
+- **`1 TRANSACTIONS` Section D** (the Freight invoice register) is also
+  real code now — `scripts/sync_freight_register.py`. Same pattern as
+  Section E, plus a Freight $/Bundling $ split and an optional "Prep
+  sheet link" lookup. No Claude session needed for this part either.
+- **Everything else** (Section C's invoice register, and
   `2 FREIGHT` Section A) still needs the invoice PDFs read and matched
   against QBO — there's no committed code for that yet (see the
   README's "Not built yet" list). This is the manual process for that
@@ -104,19 +108,58 @@ Section E range by Paid date after writing:
 python3 scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply --sort
 ```
 
-## Step 3 — the remaining invoice registers (Claude session)
+## Step 3 — sync Section D (no Claude needed)
+
+```
+python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --credentials token.json
+python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --credentials token.json --prep-sheet-folder-id <prep_folder_id> --apply
+```
+
+`<freight_folder_id>` is the Drive folder ID of "Invoices - Freight-Bundling".
+Run Step 1 first. Dry run first, check the output:
+
+- A blank Freight $/Bundling $ means extraction failed on every document
+  for that invoice (fill in by hand).
+- A flagged payment-amount mismatch means the wire confirmation's stated
+  amount doesn't match the invoice's own Freight + Bundling total within
+  a cent (a wire fee or partial payment -- check it).
+- A region-suffixed invoice (e.g. `JG20240115E-CA`) keeps its own row
+  with its own stated dollars, but shares its Paid date with every other
+  invoice paying off the same base number (`JG20240115E`) -- confirmed
+  against real 2024 data where one wire paid for multiple region-split
+  invoices at once.
+- Pass `--prep-sheet-folder-id` to also fill in "Prep sheet link" (the
+  Drive folder holding "Prep Instructions for John Grattan FBABEE ..."
+  files) -- filled only on an unambiguous single match per month, flagged
+  otherwise (some months genuinely have more than one real file, e.g. a
+  "- Standard Speed" variant). Omit it to leave "Prep sheet link" blank
+  on every row; "Prep sheet" (the month label) is always filled in
+  either way, since it's computed from the Paid date, not looked up.
+- Any Section A backfill flagged "ambiguous" or "no matching" means it
+  couldn't confidently place that payment (fill in by hand). The match
+  is on Freight $ + Bundling $ **combined** — Section A's own amount is
+  always the full wire total.
+
+Same section-header auto-detection, insert-at-last-row, and `--sort`
+behavior as Section E (see Step 2):
+
+```
+python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --credentials token.json --prep-sheet-folder-id <prep_folder_id> --apply --sort
+```
+
+## Step 4 — the remaining invoice register (Claude session)
 
 ## What this covers
 
-- Registers C/D of `1 TRANSACTIONS` and `2 FREIGHT` Section A — the
-  invoice-level detail QBO's own report doesn't have (freight/bundling
-  split, deposit vs. balance staging, which document backs which
-  payment).
+- `1 TRANSACTIONS` Section C, and `2 FREIGHT` Section A — the
+  invoice-level detail QBO's own report doesn't have (deposit vs.
+  balance staging, which document backs which payment).
 
 ## What this does NOT cover
 
 - `1 TRANSACTIONS` Section A — see Step 1, that's real code now.
 - `1 TRANSACTIONS` Section E — see Step 2, that's real code now too.
+- `1 TRANSACTIONS` Section D — see Step 3, that's real code now too.
 - `3 COMPONENTS` (the BOM-level purchase-line detail) — maintained
   separately, trusted as-is.
 - Allocating freight/bundling/overhead to shipments or SKUs (Phase 2 —
@@ -147,10 +190,11 @@ access and the QBO CSV either uploaded or accessible):
 
 ```
 I need to populate the invoice registers of my landed-cost Google Sheet
-for <YEAR>: "1 TRANSACTIONS" Sections C/D, and "2 FREIGHT" Section A.
+for <YEAR>: "1 TRANSACTIONS" Section C, and "2 FREIGHT" Section A.
 (Section A of 1 TRANSACTIONS is already synced via
-scripts/sync_qbo_transactions.py, and Section E via
-scripts/sync_overhead_register.py -- don't rebuild either part.) I'm
+scripts/sync_qbo_transactions.py, Section E via
+scripts/sync_overhead_register.py, and Section D via
+scripts/sync_freight_register.py -- don't rebuild any of those.) I'm
 attaching/providing:
 1. A QBO "Account QuickReport" CSV for the Inventory account, <YEAR> --
    for matching invoices to real transactions, not for rebuilding
@@ -162,7 +206,7 @@ attaching/providing:
 
 Follow this method:
 
-1. Read every invoice / payment-confirmation PDF filed in the three
+1. Read every invoice / payment-confirmation PDF filed in the relevant
    Invoices folders for <YEAR>. For each, extract: amount, date,
    invoice/reference number, and payment stage (deposit / balance /
    full / refund).
@@ -174,7 +218,6 @@ Follow this method:
    confirmation, use the payment confirmation's amount/date (actual
    cash movement) over the invoice's stated amount/date.
 4. Do not silently guess or resolve:
-   - A dollar split (e.g. freight vs. bundling on one combined invoice)
    - A "refund"-labeled document's sign -- check what QBO actually
      posted it as (a credit vs. a normal positive expense) and flag
      any mismatch with the label
@@ -197,18 +240,10 @@ Columns: Invoice #, Invoice date, Balance paid date, Total Order $
 (incl exchng fees), Invoice Adjustments
 One row per distinct component order/payment event.
 
-TABLE 2 -- "1 TRANSACTIONS" Section D (FREIGHT INVOICE REGISTER)
-Columns: Invoice #, Invoice date, Paid date, Freight $, Bundling /
-packaging $
-Freight and bundling as separate columns even though the vendor bills
-them together on one invoice -- split using each invoice's own line
-items.
-
-TABLE 3 -- "2 FREIGHT" Section A (INVOICE REGISTER)
+TABLE 2 -- "2 FREIGHT" Section A (INVOICE REGISTER)
 Columns: Invoice, Prep sheet, Invoice date, Paid date, freight $
 "Prep sheet" = a month label like "2024-01 JAN", from the paid date.
-Freight-only $ (bundling is tracked in Table 2 and in 4 BUNDLING, not
-here).
+Freight-only $ (bundling is tracked in 4 BUNDLING, not here).
 
 Also give me a short reconciliation summary listing every flagged gap,
 judgment call, and dollar discrepancy over $1, so I can review before

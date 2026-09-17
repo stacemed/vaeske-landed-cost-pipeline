@@ -53,19 +53,32 @@ layout, credential setup, and how to run both.
   on category + exact amount + same year/month with a currently-blank
   Invoice #; an ambiguous or absent match is left blank and flagged
   rather than guessed. Dry run by default, `--apply` to write.
+- `landed_cost.sheets.freight_register` / `freight_sync` /
+  `scripts/sync_freight_register.py`: same upsert/backfill pattern as
+  Section E, for `1 TRANSACTIONS` Section D. A Shenzhen Linkhub invoice's
+  own text carries both a Freight $ and a Bundling $ figure, extracted
+  and trusted automatically the same way as Overhead; the wire
+  confirmation's own stated amount is cross-checked against their sum and
+  flagged (not blocked) on a mismatch. A region-suffixed invoice number
+  (e.g. `JG20240115E-CA`, when one shipment splits across FBA regions)
+  keeps its own row with its own stated dollars, but shares its Paid date
+  with every other invoice sharing the same base number once that
+  number's payment confirmation is found. Optionally also resolves
+  "Prep sheet link" against a separate Drive folder of monthly Prep
+  Instructions files, filled in only on an unambiguous match.
 
-Sections C (Components) and D (Freight/Bundling) follow the same
-upsert/backfill pattern as Section E but aren't built yet — see
+Section C (Components) follows the same upsert/backfill pattern as
+Sections D/E but isn't built yet — see
 [`docs/QBO_EXTRACTION_SOP.md`](docs/QBO_EXTRACTION_SOP.md) for how the
-still-manual parts (and `2 FREIGHT` Section A) fit alongside what's
+still-manual part (and `2 FREIGHT` Section A) fits alongside what's
 automated so far.
 
 Not built yet, in planned order:
 
-1. The same register sync for Section D (Freight/Bundling) and Section C
-   (Components) — Components' vendor invoice formats are inconsistent
-   enough that its amount extraction will be flagged for review rather
-   than trusted automatically, unlike Overhead's fixed Wise template.
+1. The same register sync for Section C (Components) — its vendor
+   invoice formats are inconsistent enough that its amount extraction
+   will be flagged for review rather than trusted automatically, unlike
+   Overhead's and Freight's fixed invoice templates.
 2. A reconciliation runner that recomputes every `ControlCheck` after a
    pipeline run and refuses to post a "final" set of numbers unless every
    check reads `OK`, matching the workbook's own rule: "if one does not
@@ -78,18 +91,19 @@ src/landed_cost/models/   # the data model (milestone 1)
 src/landed_cost/drive/    # Drive ingestion, filename parsing, and PDF-text
                            # field extraction (milestone 2)
 src/landed_cost/sheets/   # QBO CSV parsing + 1 TRANSACTIONS Section A sync,
-                           # and the Overhead (Section E) invoice register
-                           # sync (milestone 3)
+                           # and the Overhead (Section E) / Freight (Section
+                           # D) invoice register syncs (milestone 3)
 scripts/                  # runnable entry points:
                            #   get_token.py              (one-time OAuth sign-in -> token.json)
                            #   ingest_drive_folder.py    (report on category folders)
                            #   process_inbox.py          (guess + file Inbox contents)
                            #   sync_qbo_transactions.py  (QBO CSV -> 1 TRANSACTIONS Section A)
                            #   sync_overhead_register.py (Invoices - Overhead -> Section E + Section A backfill)
+                           #   sync_freight_register.py  (Invoices - Freight-Bundling -> Section D + Section A backfill)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
 docs/DRIVE_INGESTION.md   # Drive folder layout + credential setup
 docs/QBO_EXTRACTION_SOP.md # SOP + prompt for the still-manual part of the
-                           # QBO-report process (Sections C/D) that isn't
+                           # QBO-report process (Section C) that isn't
                            # automated yet
 tests/                    # tests, several checked against real numbers /
                            # filenames / invoice text from the source

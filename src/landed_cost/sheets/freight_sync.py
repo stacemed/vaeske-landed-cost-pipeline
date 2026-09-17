@@ -1,31 +1,38 @@
-"""Wires overhead_register.py's pure grouping/extraction logic to a
-SheetsClient: reads what's already in 1 TRANSACTIONS Section E, upserts
+"""Wires freight_register.py's pure grouping/extraction logic to a
+SheetsClient: reads what's already in 1 TRANSACTIONS Section D, upserts
 register rows (updates an existing invoice number's row in place, inserts
 brand-new ones), and backfills Section A's Invoice # column once a
 payment is matched.
 
-Section E lives in the same "1 TRANSACTIONS" tab as Section A -- just a
+Section D lives in the same "1 TRANSACTIONS" tab as Section A -- just a
 different row range -- so both are addressed with one sheet_name and two
 separate start_row values.
+
+Every real Section D row uses only the "Deposit invoice"/"Deposit
+payment" columns (F/G) -- "Balance invoice"/"Balance payment 1" (H/I) are
+always left blank, since Freight-Bundling invoices never actually use
+deposit/balance staged doc types in practice (see DocumentType's own
+docstring, and freight_register.py's module docstring for the real-data
+confirmation).
 """
 
 from __future__ import annotations
 
 from ..models.enums import Category
 from .client import SheetsClient
-from .overhead_register import OverheadRegisterRow
+from .freight_register import FreightRegisterRow
 from .section_a_backfill import SectionATransaction, match_section_a_row, read_section_a_rows
 
 __all__ = [
     "SectionATransaction",
     "match_section_a_row",
-    "read_existing_e_register",
+    "read_existing_d_register",
     "read_section_a_rows",
-    "sync_overhead_register",
+    "sync_freight_register",
 ]
 
 
-def read_existing_e_register(
+def read_existing_d_register(
     client: SheetsClient,
     spreadsheet_id: str,
     sheet_name: str,
@@ -34,10 +41,8 @@ def read_existing_e_register(
 ) -> tuple[dict[str, int], int]:
     """Map each already-registered invoice number to its row number.
 
-    Stops at the first row with an empty Invoice # (column A) -- NOT an
-    empty date, unlike Section A: real Section E rows for a monthly
-    retainer wire routinely have no Invoice date at all (confirmed on
-    the live sheet), so a blank date does not mean the row is unused.
+    Stops at the first row with an empty Invoice # (column A) -- same
+    boundary rule as Section E's read_existing_e_register.
     """
     end_row = start_row + max_rows - 1
     values = client.get_values(spreadsheet_id, f"'{sheet_name}'!A{start_row}:A{end_row}")
@@ -53,51 +58,55 @@ def read_existing_e_register(
     return existing, row_number
 
 
-def _row_to_e_values(row: OverheadRegisterRow) -> list[object]:
+def _row_to_d_values(row: FreightRegisterRow) -> list[object]:
     return [
         row.invoice_number,
         row.invoice_date.strftime("%m/%d/%Y") if row.invoice_date else "",
         row.paid_date.strftime("%m/%d/%Y") if row.paid_date else "",
-        float(row.amount) if row.amount is not None else "",
+        float(row.freight_amount) if row.freight_amount is not None else "",
+        float(row.bundling_amount) if row.bundling_amount is not None else "",
         row.invoice_link,
         row.payment_link,
+        "",  # Balance invoice -- always blank, see module docstring
+        "",  # Balance payment 1 -- always blank, see module docstring
+        row.prep_sheet_label,
+        row.prep_sheet_link,
     ]
 
 
-def sync_overhead_register(
+def sync_freight_register(
     client: SheetsClient,
     spreadsheet_id: str,
     sheet_name: str,
-    section_e_start_row: int,
+    section_d_start_row: int,
     section_a_start_row: int,
-    register_rows: list[OverheadRegisterRow],
+    register_rows: list[FreightRegisterRow],
     apply: bool,
     sort: bool = False,
 ) -> tuple[
-    list[OverheadRegisterRow],
-    list[tuple[int, OverheadRegisterRow]],
-    list[tuple[OverheadRegisterRow, int | None, str]],
+    list[FreightRegisterRow],
+    list[tuple[int, FreightRegisterRow]],
+    list[tuple[FreightRegisterRow, int | None, str]],
 ]:
-    """Upsert Section E from freshly-built register rows, then backfill
-    Section A's Invoice # for every row with a known amount + paid date.
+    """Upsert Section D from freshly-built register rows, then backfill
+    Section A's Invoice # for every row with a known Freight+Bundling
+    total and paid date.
 
     A register row is rebuilt from ALL currently-filed documents every
-    run (see overhead_register.build_overhead_register_rows), so
+    run (see freight_register.build_freight_register_rows), so
     "updating" an existing invoice number is a full, idempotent
-    overwrite of that row's cells -- not a diff/patch -- which is what
-    correctly picks up e.g. a payment confirmation that gets filed after
-    its invoice was already registered on its own.
+    overwrite of that row's cells -- not a diff/patch.
 
-    ``sort``, only meaningful together with ``apply`` and only when
-    there are new rows to insert, sorts the whole Section E range by
-    Paid date (ascending) after writing -- same opt-in native-sort
-    behavior as Section A's ``sync_section_a``, but by Paid date
-    (column C) rather than Invoice date (column B), since Paid date is
-    the field this module already treats as the reliable one (it's
-    what the Section A backfill matches on, and what falls back to the
-    invoice's own date when no payment confirmation is filed). Passes
-    ``num_columns=6`` to cover Section E's full A:F range -- Section
-    A's 5-column default would leave the Payment Link column behind.
+    The Section A backfill matches on Freight $ + Bundling $ combined
+    (Section A's own "Freight / bundling / packaging" amount is always
+    the full wire total, confirmed against real data: a $990.04 Section A
+    row matches a $876.88 Freight + $113.16 Bundling invoice exactly).
+
+    ``sort``, only meaningful together with ``apply`` and only when there
+    are new rows to insert, sorts the whole Section D range by Paid date
+    (ascending) after writing -- same opt-in native-sort behavior as
+    Section A's/Section E's sync functions. Passes ``num_columns=11`` to
+    cover Section D's full A:K range.
 
     Returns ``(new_rows, updated_rows, section_a_backfills)`` where
     ``updated_rows`` is ``(row_number, register_row)`` pairs and
@@ -105,12 +114,12 @@ def sync_overhead_register(
     status)`` for every register row, whether or not ``apply`` actually
     ran (so a dry run can preview exactly what would happen).
     """
-    existing_map, first_empty_row = read_existing_e_register(
-        client, spreadsheet_id, sheet_name, section_e_start_row
+    existing_map, first_empty_row = read_existing_d_register(
+        client, spreadsheet_id, sheet_name, section_d_start_row
     )
 
-    new_rows: list[OverheadRegisterRow] = []
-    updated_rows: list[tuple[int, OverheadRegisterRow]] = []
+    new_rows: list[FreightRegisterRow] = []
+    updated_rows: list[tuple[int, FreightRegisterRow]] = []
     for row in register_rows:
         if row.invoice_number in existing_map:
             updated_rows.append((existing_map[row.invoice_number], row))
@@ -118,46 +127,44 @@ def sync_overhead_register(
             new_rows.append(row)
 
     insert_at = (
-        first_empty_row - 1 if first_empty_row > section_e_start_row else section_e_start_row
+        first_empty_row - 1 if first_empty_row > section_d_start_row else section_d_start_row
     )
 
     # Read (never write) Section A even on a dry run, so the preview
     # shows exactly what --apply would do, including ambiguous/no-match
     # cases -- a caller shouldn't have to apply first to find out.
     section_a_rows = read_section_a_rows(client, spreadsheet_id, sheet_name, section_a_start_row)
-    section_a_backfills: list[tuple[OverheadRegisterRow, int | None, str]] = []
+    section_a_backfills: list[tuple[FreightRegisterRow, int | None, str]] = []
     for row in register_rows:
-        if row.amount is None or row.paid_date is None:
+        if row.freight_amount is None or row.bundling_amount is None or row.paid_date is None:
             section_a_backfills.append((row, None, "skipped -- no amount/paid date to match on"))
             continue
+        total_amount = row.freight_amount + row.bundling_amount
         match_row, status = match_section_a_row(
-            row.paid_date, row.amount, section_a_rows, Category.OVERHEAD
+            row.paid_date, total_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
         )
         section_a_backfills.append((row, match_row, status))
 
     if apply:
         for row_number, row in updated_rows:
             client.update_values(
-                spreadsheet_id, f"'{sheet_name}'!A{row_number}:F{row_number}", [_row_to_e_values(row)]
+                spreadsheet_id, f"'{sheet_name}'!A{row_number}:K{row_number}", [_row_to_d_values(row)]
             )
 
         if new_rows:
             sheet_id = client.get_sheet_id(spreadsheet_id, sheet_name)
             client.insert_rows(spreadsheet_id, sheet_id, insert_at, len(new_rows))
             last_row = insert_at + len(new_rows) - 1
-            values = [_row_to_e_values(r) for r in new_rows]
-            client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:F{last_row}", values)
+            values = [_row_to_d_values(r) for r in new_rows]
+            client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:K{last_row}", values)
 
             if sort:
                 # Sort the WHOLE section, not just the new rows -- same
-                # reasoning as sync_section_a: new rows landed above the
-                # old last row (see insert_at above), so the unsorted
-                # section spans section_e_start_row through the new end
-                # of data regardless of where the new rows themselves sit.
+                # reasoning as sync_section_a/sync_overhead_register.
                 new_last_row = first_empty_row + len(new_rows) - 1
                 client.sort_range(
-                    spreadsheet_id, sheet_id, section_e_start_row, new_last_row,
-                    sort_column_index=2, num_columns=6,
+                    spreadsheet_id, sheet_id, section_d_start_row, new_last_row,
+                    sort_column_index=2, num_columns=11,
                 )
 
         for row, match_row, _status in section_a_backfills:
