@@ -27,9 +27,8 @@ You have:
 ## Step 1 — sync Section A (no Claude needed)
 
 ```
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
-python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json --apply
-```
+python3 scripts/sync_qbo_transactions.py --qbo-folder-id 1MOuQs3CXrgTVr6IE8fXKRIUXfNOCRHlu 1wLVNF73Cmu4JOFBeQUwQXi4X6PApS4BfGLqlFZZfF9w --credentials token.json
+python3 scripts/sync_qbo_transactions.py --qbo-folder-id 1MOuQs3CXrgTVr6IE8fXKRIUXfNOCRHlu 1wLVNF73Cmu4JOFBeQUwQXi4X6PApS4BfGLqlFZZfF9w --credentials token.json --apply```
 
 Or, if you'd rather drop the export in Drive than keep it on your
 machine, use `--qbo-folder-id <folder_id>` instead of `--qbo-csv` — it
