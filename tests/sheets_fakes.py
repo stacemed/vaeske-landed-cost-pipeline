@@ -27,7 +27,7 @@ class FakeSheetsClient:
         self._rows = dict(rows)
         self.updates: list[tuple[str, list[list[object]]]] = []
         self.inserts: list[tuple[int, int]] = []
-        self.sorts: list[tuple[int, int, int, bool]] = []
+        self.sorts: list[tuple[int, int, int, bool, int]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
         start_row, end_row, start_col, end_col = _parse_a1_range(a1_range)
@@ -70,8 +70,9 @@ class FakeSheetsClient:
         end_row: int,
         sort_column_index: int,
         ascending: bool = True,
+        num_columns: int = 5,
     ) -> None:
-        self.sorts.append((start_row, end_row, sort_column_index, ascending))
+        self.sorts.append((start_row, end_row, sort_column_index, ascending, num_columns))
         rows_in_range = [self._rows[r] for r in range(start_row, end_row + 1) if r in self._rows]
         rows_in_range.sort(
             key=lambda row: _parse_cell_date(row[sort_column_index]) if len(row) > sort_column_index else None,

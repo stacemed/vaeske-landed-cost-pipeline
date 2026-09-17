@@ -106,6 +106,14 @@ def main() -> int:
         action="store_true",
         help="Actually write to the sheet. Without this, only prints what it would write.",
     )
+    parser.add_argument(
+        "--sort",
+        action="store_true",
+        help="After writing, sort the whole Section E range by Paid date (ascending). Only "
+        "takes effect together with --apply, and only when new rows were inserted -- an "
+        "in-place update of an existing row never changes its position. Opt-in, not "
+        "automatic, same as --sort on sync_qbo_transactions.py.",
+    )
     args = parser.parse_args()
 
     drive_client = GoogleDriveClient.from_authorized_user_file(args.credentials)
@@ -125,6 +133,7 @@ def main() -> int:
         args.section_a_start_row,
         register_rows,
         apply=args.apply,
+        sort=args.sort,
     )
 
     print(f"\n{len(register_rows)} invoice(s) built from {len(documents)} filed document(s).")
@@ -157,6 +166,10 @@ def main() -> int:
 
     if flagged_count:
         print(f"\n{flagged_count} row(s) have a blank Overhead $ -- fill these in by hand.")
+
+    if args.apply and args.sort and new_rows:
+        print(f"\nSorted the whole Section E range (starting at row "
+              f"{args.section_e_start_row}) by Paid date.")
 
     if not args.apply and (new_rows or updated_rows):
         print("\nDry run only -- pass --apply to actually write these changes.")

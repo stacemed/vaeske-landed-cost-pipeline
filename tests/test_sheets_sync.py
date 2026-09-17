@@ -152,7 +152,7 @@ def test_sync_section_a_with_sort_restores_chronological_order():
         client, "sheet1", "1 TRANSACTIONS", start_row=6, transactions=transactions, apply=True, sort=True
     )
 
-    assert client.sorts == [(6, 7, 1, True)]  # column index 1 = Date, ascending
+    assert client.sorts == [(6, 7, 1, True, 5)]  # column index 1 = Date, ascending, A:E
     assert client._rows[6][1] == "2024-01-05"  # earlier date now first
     assert client._rows[7][1] == "03/01/2024"  # later date now second
 

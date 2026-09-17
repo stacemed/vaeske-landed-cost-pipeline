@@ -122,6 +122,47 @@ def test_sync_overhead_register_inserts_new_row_and_backfills_section_a():
     assert client._rows[6][4] == 218.0
 
 
+def test_sync_overhead_register_sort_sorts_whole_section_e_by_paid_date():
+    client = FakeSheetsClient({
+        100: ["Inspection-240102", "01/02/2024", "01/02/2024", 200.0, "", ""],
+        101: ["", "", "", "", "", ""],  # empty -- new row lands here
+    })
+    rows = [
+        _row("Inspection-240102", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
+             amount=Decimal("200.00")),
+        _row("Inspection-240102-newer", invoice_date=date(2024, 3, 1), paid_date=date(2024, 3, 1),
+             amount=Decimal("50.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True, sort=True,
+    )
+
+    # column index 2 = Paid date, num_columns=6 -- Section E's full A:F
+    # range, not Section A's 5-column default (would strand Payment Link).
+    assert client.sorts == [(100, 101, 2, True, 6)]
+
+
+def test_sync_overhead_register_sort_does_nothing_without_new_rows():
+    # An in-place update never moves a row -- sorting an update-only run
+    # would be a pointless extra write.
+    client = FakeSheetsClient({
+        100: ["Inspection-240112", "01/11/2024", "", "", "inv.pdf", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00"), invoice_link="inv.pdf", payment_link="pconf.pdf"),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True, sort=True,
+    )
+
+    assert client.sorts == []
+
+
 def test_sync_overhead_register_updates_existing_row_in_place_without_inserting():
     client = FakeSheetsClient({
         100: ["Inspection-240112", "01/11/2024", "", "", "inv.pdf", ""],  # payment not yet filed

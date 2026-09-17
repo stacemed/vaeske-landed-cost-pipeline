@@ -86,6 +86,14 @@ invoice (fill in by hand); any Section A backfill flagged "ambiguous" or
 "no matching" means it couldn't confidently place that payment (also fill
 in by hand). Everything else backfills automatically.
 
+Same insert-at-last-row-so-formulas-auto-extend behavior as Section A
+(see Step 1), and the same `--sort` opt-in — pass it to re-sort the whole
+Section E range by Paid date after writing:
+
+```
+python scripts/sync_overhead_register.py <overhead_folder_id> <spreadsheet_id> --credentials token.json --apply --sort
+```
+
 ## Step 3 — the remaining invoice registers (Claude session)
 
 ## What this covers
