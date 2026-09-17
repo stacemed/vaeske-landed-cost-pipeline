@@ -41,7 +41,16 @@ Support Docs/
   Invoices - Overhead/
   Year End Inventory Data/                        (not ingested by either module)
   FBABee Prep Sheets associated w Invoices/        (not ingested by either module)
+  QBO Reports/                       (optional -- drop QBO CSV exports here for
+                                       sync_qbo_transactions.py --qbo-folder-id)
 ```
+
+`QBO Reports` isn't part of the original agreed layout above it -- create
+it yourself (any name; pass its own folder ID to `--qbo-folder-id`) if
+you'd rather drop QBO exports in Drive than keep them on your machine.
+Read-only: `sync_qbo_transactions.py` downloads every `.csv` it finds
+there but never moves or deletes anything, so it's fine to leave old
+exports sitting in it across runs.
 
 The three `Invoices - *` folders are where correctly-named,
 correctly-filed documents live (per the `SourceDocument` convention in
@@ -218,8 +227,8 @@ and doesn't cover, and where a Claude session still has to fill in the
 rest:
 
 ```
-python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json
-python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json --apply
+python scripts/sync_qbo_transactions.py --qbo-csv qbo_export.csv <spreadsheet_id> --credentials token.json
+python scripts/sync_qbo_transactions.py --qbo-folder-id <drive_folder_id> <spreadsheet_id> --credentials token.json --apply
 ```
 
 All three exit non-zero if anything needs a look (`sync_qbo_transactions.py`

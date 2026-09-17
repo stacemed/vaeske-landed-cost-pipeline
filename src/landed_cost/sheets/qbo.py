@@ -128,6 +128,29 @@ def parse_qbo_quickreport_csv(text: str) -> list[QboTransaction]:
     return transactions
 
 
+def merge_qbo_csv_texts(texts: list[str]) -> list[QboTransaction]:
+    """Parse several QBO CSV exports and combine them into one
+    deduplicated transaction list.
+
+    For when reports get exported per period and dropped in a Drive
+    folder over time -- a later export often re-covers dates an earlier
+    one already included. Dedup key is ``(date, amount)``, same as
+    ``plan_section_a_sync`` uses against the live sheet -- two genuinely
+    different transactions sharing both is rare enough that a missed
+    one would be a visible gap, not a silently wrong number.
+    """
+    seen: set[tuple[date_cls, Decimal]] = set()
+    merged: list[QboTransaction] = []
+    for text in texts:
+        for txn in parse_qbo_quickreport_csv(text):
+            key = (txn.date, txn.amount)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(txn)
+    return merged
+
+
 def classify_category(name: str, description: str) -> Category | None:
     """Best-effort category from vendor text alone. Returns ``None``
     (never a guess) when nothing matches -- see the module docstring

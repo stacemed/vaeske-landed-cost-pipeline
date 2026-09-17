@@ -7,7 +7,15 @@ Sheets API, and only code that actually writes to a live sheet needs it
 installed.
 """
 
-from .qbo import QboTransaction, SectionARow, classify_category, clean_payee, parse_qbo_quickreport_csv, plan_section_a_sync
+from .qbo import (
+    QboTransaction,
+    SectionARow,
+    classify_category,
+    clean_payee,
+    merge_qbo_csv_texts,
+    parse_qbo_quickreport_csv,
+    plan_section_a_sync,
+)
 from .sync import read_existing_section_a, sync_section_a
 
 __all__ = [
@@ -15,6 +23,7 @@ __all__ = [
     "SectionARow",
     "classify_category",
     "clean_payee",
+    "merge_qbo_csv_texts",
     "parse_qbo_quickreport_csv",
     "plan_section_a_sync",
     "read_existing_section_a",
