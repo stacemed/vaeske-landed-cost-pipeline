@@ -30,15 +30,30 @@ source workbook. See [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
 See [`docs/DRIVE_INGESTION.md`](docs/DRIVE_INGESTION.md) for the folder
 layout, credential setup, and how to run both.
 
+**Milestone 3: writing back to the Sheet — started.**
+- `landed_cost.sheets` / `scripts/sync_qbo_transactions.py`: parses a QBO
+  "Account QuickReport" CSV, classifies each transaction's category by
+  vendor pattern alone (no invoice reading needed for this part), and
+  syncs new rows into `1 TRANSACTIONS` Section A — dry run by default,
+  `--apply` to actually write, skips transactions already present
+  (matched by date + amount) so re-running is safe. An unrecognized
+  vendor is never guessed into a category — it's still written (a real
+  QBO transaction is never silently dropped) but flagged with a blank
+  Category for you to fill in.
+
+This deliberately covers only Section A, the fully mechanical part —
+see [`docs/QBO_EXTRACTION_SOP.md`](docs/QBO_EXTRACTION_SOP.md) for why,
+and for how the rest (the invoice registers, Sections C/D/E, which need
+the invoice PDFs read and matched — still a Claude-session process) fits
+alongside it.
+
 Not built yet, in planned order:
 
-1. A Google Sheets client that reads/writes the exact ranges the models
-   above are shaped around, so the mapping can't silently drift from the
-   real sheet.
-2. Wiring the confidently-extracted fields (freight, overhead) into
-   populated `FreightInvoiceRegister` / etc. rows; a review step before
-   anything feeds a tax number for the categories that can't auto-extract.
-3. A reconciliation runner that recomputes every `ControlCheck` after a
+1. Extending the sync to Sections C/D/E — needs invoice-PDF amount
+   extraction as real code, not just filename classification (see the
+   SOP for why that's a harder, higher-stakes problem than filename
+   guessing and hasn't been automated yet).
+2. A reconciliation runner that recomputes every `ControlCheck` after a
    pipeline run and refuses to post a "final" set of numbers unless every
    check reads `OK`, matching the workbook's own rule: "if one does not
    [read zero], the number below it is wrong — do not send the file."
@@ -49,12 +64,17 @@ Not built yet, in planned order:
 src/landed_cost/models/   # the data model (milestone 1)
 src/landed_cost/drive/    # Drive ingestion, filename parsing, and PDF-text
                            # field extraction (milestone 2)
+src/landed_cost/sheets/   # QBO CSV parsing + 1 TRANSACTIONS Section A
+                           # sync (milestone 3)
 scripts/                  # runnable entry points:
-                           #   get_token.py            (one-time OAuth sign-in -> token.json)
-                           #   ingest_drive_folder.py  (report on category folders)
-                           #   process_inbox.py        (guess + file Inbox contents)
+                           #   get_token.py              (one-time OAuth sign-in -> token.json)
+                           #   ingest_drive_folder.py    (report on category folders)
+                           #   process_inbox.py          (guess + file Inbox contents)
+                           #   sync_qbo_transactions.py  (QBO CSV -> 1 TRANSACTIONS Section A)
 docs/DATA_MODEL.md        # design notes + sheet-to-model mapping
 docs/DRIVE_INGESTION.md   # Drive folder layout + credential setup
+docs/QBO_EXTRACTION_SOP.md # SOP + prompt for the rest of the QBO-report
+                           # process (Sections C/D/E) that isn't automated yet
 tests/                    # tests, several checked against real numbers /
                            # filenames / invoice text from the source
                            # workbook and Drive

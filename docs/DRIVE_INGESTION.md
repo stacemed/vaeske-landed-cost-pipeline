@@ -15,8 +15,14 @@ Two things touch Google Drive so far:
    confidently, moves it to `Needs Review` untouched so nothing is ever
    silently misfiled.
 
-Neither writes anything back to the workbook or touches Google Sheets yet
--- see the roadmap in the main README for what comes after this.
+Neither writes anything back to the workbook. A third piece,
+`landed_cost.sheets` (`scripts/sync_qbo_transactions.py`), does touch the
+live Google Sheet -- see its own docstring and
+[`docs/QBO_EXTRACTION_SOP.md`](QBO_EXTRACTION_SOP.md) for what it
+automates (1 TRANSACTIONS Section A only) and what still needs a Claude
+session (the invoice registers). It needs the Sheets scope in addition
+to Drive's -- `scripts/get_token.py` requests both together, see
+"Setting up credentials" below.
 
 ## Folder layout
 
@@ -144,9 +150,11 @@ the simplest path is an OAuth "Desktop app" client, not a service account
 service-account email, which is more setup for no benefit here):
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a
-   project (or reuse one), enable the **Google Drive API**, and under
-   "APIs & Services > Credentials" create an OAuth client ID of type
-   **Desktop app**. Download the resulting `client_secret_<id>.json`.
+   project (or reuse one), enable both the **Google Drive API** and the
+   **Google Sheets API** (the latter only needed if you'll run
+   `sync_qbo_transactions.py`), and under "APIs & Services > Credentials"
+   create an OAuth client ID of type **Desktop app**. Download the
+   resulting `client_secret_<id>.json`.
 2. Run the one-time local authorization flow to turn that into a cached
    user token (`token.json`) that `GoogleDriveClient.from_authorized_user_file`
    reads:
@@ -168,10 +176,13 @@ service-account email, which is more setup for no benefit here):
    `process_inbox.py` needs to rename and move files, and the narrower
    `drive.file` scope wouldn't give access to files that already existed
    in the folder before the app touched them (it only covers files the
-   app itself creates, or ones picked through a Drive Picker UI). If you
-   generated a `token.json` before this scope was added, delete it and
-   redo this step -- Google won't silently upgrade an existing token's
-   scope.
+   app itself creates, or ones picked through a Drive Picker UI).
+   `get_token.py` also requests `.../auth/spreadsheets`, for
+   `sync_qbo_transactions.py` -- that needs the **Google Sheets API**
+   enabled on the same Cloud project too (step 1 above), not just Drive's.
+   If you generated a `token.json` before either of these scopes was
+   added, delete it and redo this step -- Google won't silently upgrade
+   an existing token's scope.
 3. Get the root folder's ID from its URL:
    `https://drive.google.com/drive/folders/<this part>`.
 4. This one-time browser step needs a real browser, so run it on your own
@@ -201,12 +212,25 @@ python scripts/process_inbox.py <root_folder_id> --credentials token.json --appl
 
 Both exit non-zero if anything needs a look.
 
+Sync a year's QBO transactions into `1 TRANSACTIONS` Section A -- see
+[`docs/QBO_EXTRACTION_SOP.md`](QBO_EXTRACTION_SOP.md) for what this does
+and doesn't cover, and where a Claude session still has to fill in the
+rest:
+
+```
+python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json
+python scripts/sync_qbo_transactions.py qbo_export.csv <spreadsheet_id> --credentials token.json --apply
+```
+
+All three exit non-zero if anything needs a look (`sync_qbo_transactions.py`
+specifically: any new row with a blank Category).
+
 ## What's next
 
-Per the main README roadmap: a Sheets client to read/write the live
-workbook, then wiring the confidently-extracted fields (freight, overhead)
-into populated `FreightInvoiceRegister` / etc. rows, and the
-`ControlCheck` gate before anything is called final. Components will keep
-needing a human to type the invoice number even after that, per the
+Per the main README roadmap: wiring the confidently-extracted fields
+(freight, overhead) into populated `FreightInvoiceRegister` / etc. rows
+(Sections C/D/E -- `sync_qbo_transactions.py` only covers Section A), and
+the `ControlCheck` gate before anything is called final. Components will
+keep needing a human to type the invoice number even after that, per the
 "never auto-file" design above -- worth watching whether that's still
 true once there's more real component-invoice text to learn from.
