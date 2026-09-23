@@ -70,6 +70,59 @@ def test_sync_freight_register_inserts_new_row_and_backfills_section_a_on_combin
     assert client._rows[6][4] == 990.04
 
 
+def test_sync_freight_register_matches_combined_wire_and_writes_one_joined_invoice_number():
+    # Real data (2026-09-22): two region-suffixed invoices paid in ONE
+    # wire -- $2,321.58 (JG20240115E-CA) + $6,517.08 (JG20240115E-US) =
+    # $8,838.66, matching one real Section A row exactly. Neither
+    # invoice's own amount matches Section A by itself.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 8838.66],
+        170: ["", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240115E-CA", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("2044.32"), bundling_amount=Decimal("277.26")),
+        _row("JG20240115E-US", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("5659.54"), bundling_amount=Decimal("857.54")),
+    ]
+
+    new_rows, updated_rows, backfills = sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert [b[1] for b in backfills] == [6, 6]
+    assert all("combined wire" in b[2] for b in backfills)
+    # ONE write, both invoice numbers comma-joined -- not a last-write-
+    # wins overwrite from two separate single-cell writes.
+    assert client._rows[6][3] == "JG20240115E-CA, JG20240115E-US"
+    assert client._rows[6][0] == "Freight / bundling / packaging"  # untouched
+    assert client._rows[6][4] == 8838.66  # untouched
+
+
+def test_sync_freight_register_does_not_guess_when_no_combined_match_exists():
+    # Two same-day invoices whose combined total matches nothing in
+    # Section A -- must stay unmatched, not guess at a partial/wrong sum.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 12345.67],
+        170: ["", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240115E-CA", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("2044.32"), bundling_amount=Decimal("277.26")),
+        _row("JG20240115E-US", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("5659.54"), bundling_amount=Decimal("857.54")),
+    ]
+
+    _, _, backfills = sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert [b[1] for b in backfills] == [None, None]
+    assert client._rows[6][3] == ""
+
+
 def test_sync_freight_register_updates_existing_row_in_place_without_inserting():
     client = FakeSheetsClient({
         170: ["JG20240108E", "01/12/2024", "", "876.88", "113.16", "inv.pdf", "",

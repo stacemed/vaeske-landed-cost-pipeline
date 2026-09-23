@@ -12,6 +12,7 @@ from .freight_register import (
     base_invoice_number,
     build_freight_register_rows,
     extract_freight_and_bundling,
+    extract_invoice_total,
     extract_payment_amount,
 )
 from .freight_sync import read_existing_d_register, sync_freight_register
@@ -53,6 +54,7 @@ __all__ = [
     "classify_category",
     "clean_payee",
     "extract_freight_and_bundling",
+    "extract_invoice_total",
     "extract_overhead_amount",
     "extract_payment_amount",
     "find_section_data_start_row",
