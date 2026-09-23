@@ -76,6 +76,39 @@ def test_find_prep_sheet_link_ignores_folders():
     assert "no Prep Instructions file found" in status
 
 
+def test_find_prep_sheet_link_matches_despite_copy_of_prefix():
+    # Real pattern (2026-09-22): every file in a real 2024 prep sheets
+    # folder is prefixed "Copy of " from being moved/duplicated. A
+    # startswith-based match would find nothing in that folder at all.
+    client = FakeDriveClient({
+        "prep-folder": [
+            _file("1", "Copy of Prep Instructions for John Grattan FBABEE 2024-08 AUG.xlsx"),
+        ]
+    })
+
+    link, status = find_prep_sheet_link(client, "prep-folder", "2024-08 AUG")
+
+    assert link == "Copy of Prep Instructions for John Grattan FBABEE 2024-08 AUG.xlsx"
+    assert status == "matched"
+
+
+def test_find_prep_sheet_link_flags_a_real_duplicate_filename():
+    # Real pattern (2026-09-22): the same real folder has two files both
+    # literally named "...2024-06 JUN.xlsx" (different file sizes) --
+    # an actual duplicate, not just a differently-labeled variant.
+    client = FakeDriveClient({
+        "prep-folder": [
+            _file("1", "Copy of Prep Instructions for John Grattan FBABEE 2024-06 JUN.xlsx"),
+            _file("2", "Copy of Prep Instructions for John Grattan FBABEE 2024-06 JUN.xlsx"),
+        ]
+    })
+
+    link, status = find_prep_sheet_link(client, "prep-folder", "2024-06 JUN")
+
+    assert link == ""
+    assert "ambiguous" in status
+
+
 def test_find_prep_sheet_link_no_match_for_unrelated_month():
     client = FakeDriveClient({
         "prep-folder": [
