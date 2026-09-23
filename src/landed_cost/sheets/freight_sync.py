@@ -18,6 +18,8 @@ confirmation).
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from ..models.enums import Category
 from .client import SheetsClient
 from .freight_register import FreightRegisterRow
@@ -102,6 +104,18 @@ def sync_freight_register(
     the full wire total, confirmed against real data: a $990.04 Section A
     row matches a $876.88 Freight + $113.16 Bundling invoice exactly).
 
+    When a row's own total doesn't match anything by itself, it also
+    tries the COMBINED total of every register row sharing its exact
+    Paid date -- confirmed against real data that several Freight
+    invoices routinely get paid together in one wire (both region-
+    suffixed invoices sharing a base number, e.g. $2,321.58 +
+    $6,517.08 = $8,838.66 matching one real Section A row exactly; and
+    entirely separate invoice numbers that just happened to be paid
+    together). Matches only on an exact combined sum (never guesses
+    which subset of same-day invoices belong together), and writes ONE
+    comma-joined Invoice # value listing every contributing invoice, not
+    a last-write-wins overwrite from separate single-cell writes.
+
     ``sort``, only meaningful together with ``apply`` and only when there
     are new rows to insert, sorts the whole Section D range by Paid date
     (ascending) after writing -- same opt-in native-sort behavior as
@@ -134,15 +148,39 @@ def sync_freight_register(
     # shows exactly what --apply would do, including ambiguous/no-match
     # cases -- a caller shouldn't have to apply first to find out.
     section_a_rows = read_section_a_rows(client, spreadsheet_id, sheet_name, section_a_start_row)
+
+    # Rows with a known total and Paid date, grouped by that date -- the
+    # candidate pool for combined-wire matching below.
+    matchable_rows = [
+        row for row in register_rows
+        if row.freight_amount is not None and row.bundling_amount is not None and row.paid_date is not None
+    ]
+    rows_by_paid_date: dict[object, list[FreightRegisterRow]] = {}
+    for row in matchable_rows:
+        rows_by_paid_date.setdefault(row.paid_date, []).append(row)
+
     section_a_backfills: list[tuple[FreightRegisterRow, int | None, str]] = []
     for row in register_rows:
         if row.freight_amount is None or row.bundling_amount is None or row.paid_date is None:
             section_a_backfills.append((row, None, "skipped -- no amount/paid date to match on"))
             continue
-        total_amount = row.freight_amount + row.bundling_amount
+
+        own_amount = row.freight_amount + row.bundling_amount
         match_row, status = match_section_a_row(
-            row.paid_date, total_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
+            row.paid_date, own_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
         )
+        if match_row is None:
+            siblings = rows_by_paid_date.get(row.paid_date, [])
+            if len(siblings) > 1:
+                combined_amount = sum(
+                    (r.freight_amount + r.bundling_amount for r in siblings), Decimal("0")
+                )
+                combined_match_row, combined_status = match_section_a_row(
+                    row.paid_date, combined_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
+                )
+                if combined_match_row is not None:
+                    match_row = combined_match_row
+                    status = f"matched as part of a combined wire with {len(siblings)} invoices total"
         section_a_backfills.append((row, match_row, status))
 
     if apply:
@@ -167,10 +205,17 @@ def sync_freight_register(
                     sort_column_index=2, num_columns=11,
                 )
 
+        # Grouped by match_row -- a combined-wire match sends several
+        # register rows to the same Section A row, and each needs to
+        # land in ONE write with every contributing invoice number, not
+        # separate single-cell writes overwriting each other.
+        invoice_numbers_by_match_row: dict[int, list[str]] = {}
         for row, match_row, _status in section_a_backfills:
             if match_row is not None:
-                client.update_values(
-                    spreadsheet_id, f"'{sheet_name}'!D{match_row}", [[row.invoice_number]]
-                )
+                invoice_numbers_by_match_row.setdefault(match_row, []).append(row.invoice_number)
+        for match_row, invoice_numbers in invoice_numbers_by_match_row.items():
+            client.update_values(
+                spreadsheet_id, f"'{sheet_name}'!D{match_row}", [[", ".join(sorted(invoice_numbers))]]
+            )
 
     return new_rows, updated_rows, section_a_backfills

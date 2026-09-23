@@ -29,8 +29,17 @@ Either way, the resolved row is verified against the sheet (must read
 Freight $/Bundling $ extraction is automated and trusted by default here
 (unlike Components' planned Section C), since a Shenzhen Linkhub invoice's
 text is a fixed, machine-generated template -- see freight_register.py's
-docstring. When it still fails for a given invoice, that row is written
-with blank amounts and flagged; fill it in by hand.
+docstring for both the older two-subtotal template and the newer
+line-item-sum fallback it also supports. When it still fails for a given
+invoice, that row is written with blank amounts and flagged; fill it in
+by hand.
+
+The Section A backfill also recognizes combined wires -- several Freight
+invoices paid together in one wire, a real and common pattern -- by
+trying the combined total of every register row sharing an exact Paid
+date when no single invoice matches on its own. A combined match writes
+one comma-joined Invoice # listing every contributing invoice, and shows
+"(combined wire)" in this script's output.
 
 Pass --prep-sheet-folder-id to also fill in the "Prep sheet link" column
 (the Drive folder holding "Prep Instructions for John Grattan FBABEE
@@ -242,7 +251,8 @@ def main() -> int:
     print(f"\nSection A Invoice # backfill: {len(matched)} matched"
           f"{' and written' if args.apply else ' (would write)'}, {len(unmatched)} not matched:")
     for row, match_row, status in matched:
-        print(f"    {row.invoice_number:<24} -> row {match_row}")
+        note = " (combined wire)" if "combined wire" in status else ""
+        print(f"    {row.invoice_number:<24} -> row {match_row}{note}")
     for row, _match_row, status in unmatched:
         print(f"  ! {row.invoice_number:<24} -> {status}")
 

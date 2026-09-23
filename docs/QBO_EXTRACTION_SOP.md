@@ -119,10 +119,17 @@ python3 scripts/sync_freight_register.py <freight_folder_id> <spreadsheet_id> --
 Run Step 1 first. Dry run first, check the output:
 
 - A blank Freight $/Bundling $ means extraction failed on every document
-  for that invoice (fill in by hand).
-- A flagged payment-amount mismatch means the wire confirmation's stated
-  amount doesn't match the invoice's own Freight + Bundling total within
-  a cent (a wire fee or partial payment -- check it).
+  for that invoice (fill in by hand). Handles both Linkhub invoice
+  template eras: older invoices with two separate subtotal lines, and
+  newer ones (confirmed on real invoices from mid-2024 onward) that list
+  every charge as a plain line item under one combined subtotal instead
+  — summed by keyword (freight legs and surcharges into Freight $;
+  Bundling/Tape/Airbags/Polybags into Bundling $) and cross-checked
+  against the invoice's own stated total.
+- A flagged total mismatch (either against the invoice's own stated
+  total, or against a payment confirmation's stated amount) means the
+  extracted Freight + Bundling sum doesn't match within a cent — an
+  unrecognized line item, a wire fee, or a partial payment; check it.
 - A region-suffixed invoice (e.g. `JG20240115E-CA`) keeps its own row
   with its own stated dollars, but shares its Paid date with every other
   invoice paying off the same base number (`JG20240115E`) -- confirmed
@@ -138,7 +145,11 @@ Run Step 1 first. Dry run first, check the output:
 - Any Section A backfill flagged "ambiguous" or "no matching" means it
   couldn't confidently place that payment (fill in by hand). The match
   is on Freight $ + Bundling $ **combined** — Section A's own amount is
-  always the full wire total.
+  always the full wire total. When no single invoice matches, it also
+  tries the combined total of every invoice sharing that exact Paid date
+  (confirmed common in real data — several Freight invoices routinely
+  get paid together in one wire) and, on an exact match, writes one
+  Invoice # cell listing every contributing invoice, comma-joined.
 
 Same section-header auto-detection, insert-at-last-row, and `--sort`
 behavior as Section E (see Step 2):

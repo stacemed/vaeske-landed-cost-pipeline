@@ -2,20 +2,35 @@
 the filed documents in "Invoices - Freight-Bundling", grouped by invoice
 number.
 
-Confirmed against real 2024-2025 Shenzhen Linkhub / FBSL documents
+Confirmed against real 2024-2026 Shenzhen Linkhub / FBSL documents
 (2026-09-18):
 
-- An invoice's own text is a fixed, machine-generated template with two
+- Older invoices (through mid-2024) use a fixed template with two
   "SUB TOTAL" lines -- the first under "FREIGHT CHARGES" (Freight $),
   the second under "ADDITIONAL CHARGES" (Bundling $) -- followed by a
-  "GRAND TOTAL" that's their sum. The wire-confirmation payment document
-  does NOT carry this split (e.g. "Amount $990.04" alone), so unlike
-  Overhead, the dollar split is read from the INVOICE text, never the
-  payment confirmation's.
-- The payment confirmation's "Amount $" line is still useful as a cross
-  check against the invoice's own Freight + Bundling total -- flagged
-  (not blocking) if they disagree by more than a cent, since a wire fee
-  or partial payment would show up here.
+  "GRAND TOTAL" that's their sum.
+- Newer invoices (confirmed on real July 2024 and 2026 files) dropped
+  that per-section breakdown entirely: every charge -- freight legs,
+  Bundling, and sometimes extra packaging materials (Tape, Airbags,
+  Polybags) or surcharges (Remote area surcharge) -- is just one more
+  line item under a single combined "Subtotal"/"TOTAL US$", with no
+  subtotal per category at all. For these,
+  ``_extract_freight_and_bundling_from_line_items`` sums each
+  recognized line item's own extended dollar amount (the LAST "$"
+  figure on its line -- earlier ones are unit rates) into Freight $ or
+  Bundling $ by keyword. The invoice's own "TOTAL US$" line (present on
+  both template eras) is then used to cross-check the sum -- flagged,
+  not blocked, if they disagree by more than a cent (a real invoice's
+  own per-line rounding can differ from a re-summed total by exactly a
+  cent; anything more suggests an unrecognized line-item keyword).
+- The wire-confirmation payment document does NOT carry the Freight/
+  Bundling split either way (e.g. "Amount $990.04" alone), so the
+  dollar split always comes from the INVOICE text, never the payment
+  confirmation's.
+- The payment confirmation's "Amount $" line is still useful as a
+  second cross check against the invoice's own Freight + Bundling
+  total -- flagged (not blocking) if they disagree by more than a cent,
+  since a wire fee or partial payment would show up here.
 - Real invoice numbers sometimes carry a country suffix (``JG20240115E-CA``,
   ``JG20240422E-US``) when one shipment splits across FBA regions, but the
   wire that pays for them references only the base number
@@ -60,29 +75,111 @@ _PAYMENT_DOC_TYPES = {
 
 _SUB_TOTAL_PATTERN = re.compile(r"SUB TOTAL\s+US\$\s*([\d,]+\.\d{2})", re.IGNORECASE)
 _PAYMENT_AMOUNT_PATTERN = re.compile(r"\bAmount\s+\$\s*([\d,]+\.\d{2})", re.IGNORECASE)
+# Present on both the old and new invoice templates alike -- "THANK YOU
+# FOR YOUR BUSINESS TOTAL US$990.04" / "TOTAL US$2,144.19". The negative
+# lookbehind excludes the old template's own "SUB TOTAL US$..." lines,
+# which would otherwise match too (and, appearing earlier in the text,
+# would be found first).
+_INVOICE_TOTAL_PATTERN = re.compile(r"(?<!SUB )\bTOTAL\s+US\$\s*([\d,]+\.\d{2})", re.IGNORECASE)
+
+# Newer-template line items, by which Section D column their own
+# extended dollar amount belongs in. Confirmed against real July 2024
+# and 2026 invoices -- a freight leg always starts "DDP Sea Freight",
+# and "Remote area surcharge" is a per-shipment surcharge tied to one of
+# those legs, so both count as Freight $; the rest are packaging
+# materials/labor, so they count as Bundling $. Not exhaustive -- an
+# unrecognized future line item shows up as a Freight+Bundling sum that
+# doesn't match the invoice's own TOTAL, which is flagged (see
+# build_freight_register_rows), not silently dropped.
+_FREIGHT_LINE_ITEM_KEYWORDS = ("DDP Sea Freight", "Remote area surcharge")
+_BUNDLING_LINE_ITEM_KEYWORDS = ("Bundling", "Tape", "Airbags", "Polybags")
+_LINE_ITEM_START_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in _FREIGHT_LINE_ITEM_KEYWORDS + _BUNDLING_LINE_ITEM_KEYWORDS),
+    re.IGNORECASE,
+)
+_LINE_ITEM_AMOUNT_PATTERN = re.compile(r"\$\s*([\d,]+\.\d{2})")
+_SUBTOTAL_STOP_PATTERN = re.compile(r"\bSubtotal\b", re.IGNORECASE)
 
 # A base invoice number is "JG" + digits + "E"; anything after that is a
 # per-shipment/region suffix ("-CA", "-US", "-CA+DE", "-Refurn", ...).
 _BASE_INVOICE_NUMBER_PATTERN = re.compile(r"^(JG\d+E)(?:-.+)?$")
 
 
+def _extract_freight_and_bundling_from_line_items(text: str) -> tuple[Decimal | None, Decimal | None]:
+    """Fallback for the newer invoice template, which has no per-section
+    subtotal at all -- sums each recognized line item's own extended
+    dollar amount (the LAST "$" figure between it and the next line item
+    or "Subtotal"; earlier ones on the same line are unit rates, e.g.
+    "$2.10 per kgs 404.26 $848.95" -- 848.95 is the one that's wanted)
+    into Freight $ or Bundling $ by its starting keyword.
+    """
+    keyword_matches = list(_LINE_ITEM_START_PATTERN.finditer(text))
+    if not keyword_matches:
+        return None, None
+
+    stop_match = _SUBTOTAL_STOP_PATTERN.search(text)
+    end_of_items = stop_match.start() if stop_match else len(text)
+    freight_keywords_lower = {k.lower() for k in _FREIGHT_LINE_ITEM_KEYWORDS}
+
+    freight_total = Decimal("0")
+    bundling_total = Decimal("0")
+    found_any_amount = False
+    for i, match in enumerate(keyword_matches):
+        segment_end = keyword_matches[i + 1].start() if i + 1 < len(keyword_matches) else end_of_items
+        segment = text[match.end():segment_end]
+        amounts = _LINE_ITEM_AMOUNT_PATTERN.findall(segment)
+        if not amounts:
+            continue
+        try:
+            amount = Decimal(amounts[-1].replace(",", ""))
+        except InvalidOperation:
+            continue
+        found_any_amount = True
+        if match.group(0).lower() in freight_keywords_lower:
+            freight_total += amount
+        else:
+            bundling_total += amount
+
+    if not found_any_amount:
+        return None, None
+    return freight_total, bundling_total
+
+
 def extract_freight_and_bundling(text: str) -> tuple[Decimal | None, Decimal | None]:
-    """Freight $ and Bundling $ from an invoice's own text, in that
-    order -- the first "SUB TOTAL" line is Freight, the second is
-    Bundling. Returns ``(None, None)`` if no "SUB TOTAL" line is found
-    at all; if exactly one is found (an invoice with no bundling charge),
-    Bundling $ is ``Decimal("0")``.
+    """Freight $ and Bundling $ from an invoice's own text.
+
+    Tries the older two-"SUB TOTAL"-line template first (the first line
+    is Freight, the second is Bundling -- or Bundling is ``Decimal("0")``
+    if there's only one, an invoice with no bundling charge). Falls back
+    to summing individual line items (see
+    ``_extract_freight_and_bundling_from_line_items``) for the newer
+    template, which has no per-section subtotal at all. Returns
+    ``(None, None)`` if neither approach finds anything.
     """
     matches = _SUB_TOTAL_PATTERN.findall(text)
-    if not matches:
-        return None, None
+    if matches:
+        try:
+            amounts = [Decimal(m.replace(",", "")) for m in matches]
+        except InvalidOperation:
+            return _extract_freight_and_bundling_from_line_items(text)
+        freight = amounts[0]
+        bundling = amounts[1] if len(amounts) > 1 else Decimal("0")
+        return freight, bundling
+    return _extract_freight_and_bundling_from_line_items(text)
+
+
+def extract_invoice_total(text: str) -> Decimal | None:
+    """The invoice's own stated grand total -- used only as a cross
+    check against the extracted Freight + Bundling sum, present on both
+    the old and new template eras alike.
+    """
+    match = _INVOICE_TOTAL_PATTERN.search(text)
+    if not match:
+        return None
     try:
-        amounts = [Decimal(m.replace(",", "")) for m in matches]
+        return Decimal(match.group(1).replace(",", ""))
     except InvalidOperation:
-        return None, None
-    freight = amounts[0]
-    bundling = amounts[1] if len(amounts) > 1 else Decimal("0")
-    return freight, bundling
+        return None
 
 
 def extract_payment_amount(text: str) -> Decimal | None:
@@ -201,11 +298,6 @@ def build_freight_register_rows(
                 if freight_amount is not None:
                     break
 
-        is_refund = any(d.doc_type == DocumentType.REFUND_INVOICE for d, _ in invoice_items)
-        if is_refund and freight_amount is not None:
-            freight_amount = -abs(freight_amount)
-            bundling_amount = -abs(bundling_amount) if bundling_amount else bundling_amount
-
         flagged = freight_amount is None
         flag_reason = (
             "could not extract Freight $/Bundling $ from any document for this "
@@ -214,20 +306,44 @@ def build_freight_register_rows(
             else ""
         )
 
+        if not flagged:
+            computed_total = freight_amount + bundling_amount
+            for _, text in invoice_items:
+                stated_total = extract_invoice_total(text)
+                if stated_total is None:
+                    continue
+                if abs(stated_total - computed_total) > Decimal("0.01"):
+                    flagged = True
+                    flag_reason = (
+                        f"invoice states a total of ${stated_total} but the extracted "
+                        f"Freight + Bundling line items sum to ${computed_total} -- a "
+                        f"line item may not have been recognized, check by hand"
+                    )
+                break
+
         if not flagged and payment_items:
+            computed_total = freight_amount + bundling_amount
             for _, text in payment_items:
                 payment_amount = extract_payment_amount(text)
                 if payment_amount is None:
                     continue
-                invoice_total = freight_amount + bundling_amount
-                if abs(payment_amount - invoice_total) > Decimal("0.01"):
+                if abs(payment_amount - computed_total) > Decimal("0.01"):
                     flagged = True
                     flag_reason = (
                         f"payment confirmation states ${payment_amount} but invoice "
-                        f"Freight + Bundling totals ${invoice_total} -- check for a "
+                        f"Freight + Bundling totals ${computed_total} -- check for a "
                         f"wire fee or partial payment"
                     )
                 break
+
+        # Applied last, after both cross-checks -- they validate that
+        # extraction read the invoice's own (always positive) line items
+        # correctly, which is a separate question from the refund/credit
+        # sign convention Section D itself stores.
+        is_refund = any(d.doc_type == DocumentType.REFUND_INVOICE for d, _ in invoice_items)
+        if is_refund and freight_amount is not None:
+            freight_amount = -abs(freight_amount)
+            bundling_amount = -abs(bundling_amount) if bundling_amount else bundling_amount
 
         paid_date_or_invoice_date = paid_date or invoice_date
         prep_sheet_label = _prep_sheet_label(paid_date_or_invoice_date) if paid_date_or_invoice_date else ""

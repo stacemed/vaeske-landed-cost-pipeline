@@ -6,6 +6,7 @@ from landed_cost.sheets.freight_register import (
     base_invoice_number,
     build_freight_register_rows,
     extract_freight_and_bundling,
+    extract_invoice_total,
     extract_payment_amount,
 )
 
@@ -90,6 +91,108 @@ SUB TOTAL US$2,861.85
 THANK YOU FOR YOUR BUSINESS GRAND TOTAL US$2,861.85
 """
 
+# Real text confirmed against an actual JG20240711E invoice (2026-09-22) --
+# Linkhub's newer template, no per-section subtotal at all. Freight legs
+# sum to $11,693.05 (including the "Remote area surcharge"), Bundling to
+# $672.34; their sum is a cent off the invoice's own stated Subtotal
+# ($12,365.38 vs $12,365.39), which is real per-line rounding noise on
+# the vendor's own invoice, not an extraction error -- within tolerance.
+NEW_TEMPLATE_INVOICE_TEXT = """John Grattan Invoice JG20240711E
+
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20240711E US$12,365.38 INVOICE DATE 12-Jul-2024 DUE DATE 13-Jul-2024
+
+BILL TO
+
+John Grattan
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+
+DDP Sea Freight SPD LH01281197 Ship to BER8
+
+20 CTNS | 224 KGS | 2.42 CBM $2.10 per kgs 404.26 $848.95
+
+DDP Sea Freight LTL LH01281180 Ship to Vaeske C/O A&M Prep Services
+
+155 CTNS | 1280.5 KGS | 16.02 CBM $1.16 per kgs 2670 $3,097.20
+
+DDP Sea Freight SPD LH01281136 Ship to SCK8
+
+22 CTNS | 251.9 KGS | 2.647 CBM $1.62 per kgs 441.8 $715.72
+
+DDP Sea Freight LTL LH01281121 Ship to BWI4
+
+77 CTNS | 618.2 KGS | 7.96 CBM $1.54 per kgs 1327 $2,043.58
+
+DDP Sea Freight LTL LH01281113 Ship to LFT1
+
+82 CTNS | 697.3 KGS | 8.48 CBM $1.69 per kgs 1413 $2,387.97
+
+DDP Sea Freight LTL LH01281104 Ship to SLC2
+
+61 CTNS | 469.5 KGS | 6.31 CBM $1.59 per kgs 1051 $1,671.09
+
+DDP Sea Freight LTL LH01281093 Ship to YYZ3
+
+15 CTNS | 142.5 KGS | 1.8 CBM $1.74 per kgs 259 $450.66
+
+DDP Sea Freight LTL LH01281082 Ship to YOW3
+
+10 CTNS | 117 KGS | 1.21 CBM $1.82 per kgs 202.13 $367.88
+
+Bundling $0.62 per piece 1092 $672.34
+
+Remote area surcharge Remote area Fee of SCK8 $5.00 22 $110.00
+
+Subtotal $12,365.38
+
+THANK YOU FOR YOUR BUSINESS TOTAL US$12,365.38
+"""
+
+# Real text confirmed against an actual JG20260119E invoice (2026-09-22) --
+# same newer template, this time with packaging-material line items
+# (Tape/Airbags/Polybags) instead of a surcharge. Sums exactly to the
+# invoice's own Subtotal, no rounding noise this time.
+NEW_TEMPLATE_INVOICE_TEXT_2 = """John Grattan Invoice JG20260119E
+
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20260119E US$2,144.19 INVOICE DATE 19-Jan-2026 DUE DATE 21-Jan-2026
+
+BILL TO
+
+VAESKE
+
+John Grattan
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+
+DDP Sea Freight SPD LH03034332 Ship to DTM1
+
+17 CTNS | 188.9 KGS | 2.05 CBM $1.61 per kgs 351 $565.11
+
+DDP Sea Freight LTL LH03034311 Ship to YOO1
+
+30 CTNS | 292 KGS | 3.03 CBM $1.27 per kgs 519 $659.13
+
+DDP Sea Freight LTL LH03034308 Ship to YHM1
+
+8 CTNS | 93.6 KGS | 0.968 CBM $1.27 per kgs 165 $209.55
+
+Tape Tape with VAESKE LOGO(100 rolls) $336.00 flat rate 1 $336.00
+
+Airbags 10rolls $66.00 flat rate 1 $66.00
+
+Polybags 2000pcs $150.00 flat rate 1 $150.00
+
+Bundling 210units $158.40 flat rate 1 $158.40
+
+Subtotal $2,144.19
+
+TOTAL US$2,144.19
+"""
+
 
 def _doc(filename: str) -> SourceDocument:
     return SourceDocument.from_filename(filename)
@@ -105,6 +208,31 @@ def test_extract_freight_and_bundling_single_sub_total_treats_bundling_as_zero()
 
 def test_extract_freight_and_bundling_none_when_nothing_matches():
     assert extract_freight_and_bundling("no SUB TOTAL anywhere here") == (None, None)
+
+
+def test_extract_freight_and_bundling_new_template_sums_line_items_with_surcharge():
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_INVOICE_TEXT)
+
+    # 8 freight legs + Remote area surcharge, all routed to Freight $.
+    assert freight == Decimal("11693.05")
+    assert bundling == Decimal("672.34")
+
+
+def test_extract_freight_and_bundling_new_template_sums_packaging_materials():
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_INVOICE_TEXT_2)
+
+    assert freight == Decimal("1433.79")
+    # Tape + Airbags + Polybags + Bundling, all routed to Bundling $.
+    assert bundling == Decimal("710.40")
+
+
+def test_extract_invoice_total_ignores_sub_total_lines_on_old_template():
+    assert extract_invoice_total(INVOICE_TEXT) == Decimal("990.04")
+
+
+def test_extract_invoice_total_from_new_template():
+    assert extract_invoice_total(NEW_TEMPLATE_INVOICE_TEXT) == Decimal("12365.38")
+    assert extract_invoice_total(NEW_TEMPLATE_INVOICE_TEXT_2) == Decimal("2144.19")
 
 
 def test_extract_payment_amount_from_real_wire_confirmation():
@@ -159,6 +287,38 @@ def test_build_freight_register_rows_flags_payment_amount_mismatch():
 
     assert rows[0].flagged is True
     assert "wire fee or partial payment" in rows[0].flag_reason
+
+
+def test_build_freight_register_rows_new_template_extracts_via_line_items():
+    documents = [
+        (_doc("2024-07-12_FBSL_Frei-Bund_JG20240711E_INV-paid.pdf"), NEW_TEMPLATE_INVOICE_TEXT),
+    ]
+
+    rows = build_freight_register_rows(documents)
+
+    assert len(rows) == 1
+    assert rows[0].freight_amount == Decimal("11693.05")
+    assert rows[0].bundling_amount == Decimal("672.34")
+    # $12,365.39 (extracted sum) vs $12,365.38 (invoice's own stated
+    # total) is a cent of real per-line rounding noise -- not flagged.
+    assert rows[0].flagged is False
+
+
+def test_build_freight_register_rows_flags_stated_total_mismatch():
+    # Drop the "Remote area surcharge" line item -- the extracted sum
+    # will fall $110 short of the invoice's own stated total, well
+    # outside the real per-line rounding tolerance seen above.
+    missing_line_item_text = NEW_TEMPLATE_INVOICE_TEXT.replace(
+        "Remote area surcharge Remote area Fee of SCK8 $5.00 22 $110.00\n\n", ""
+    )
+    documents = [
+        (_doc("2024-07-12_FBSL_Frei-Bund_JG20240711E_INV-paid.pdf"), missing_line_item_text),
+    ]
+
+    rows = build_freight_register_rows(documents)
+
+    assert rows[0].flagged is True
+    assert "may not have been recognized" in rows[0].flag_reason
 
 
 def test_build_freight_register_rows_multi_region_invoices_share_base_payment():
