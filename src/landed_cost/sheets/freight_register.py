@@ -84,19 +84,18 @@ _INVOICE_TOTAL_PATTERN = re.compile(r"(?<!SUB )\bTOTAL\s+US\$\s*([\d,]+\.\d{2})"
 
 # Newer-template line items, by which Section D column their own
 # extended dollar amount belongs in. Confirmed against real July 2024
-# and 2026 invoices -- a freight leg always starts "DDP Sea Freight",
+# and 2026 invoices -- a freight leg starts "DDP Sea Freight" or "DDP
+# Truck Freight" (a real shipping-mode variant, confirmed 2026-09-24),
 # and "Remote area surcharge" is a per-shipment surcharge tied to one of
-# those legs, so both count as Freight $; the rest are packaging
+# those legs, so all three count as Freight $; the rest are packaging
 # materials/labor, so they count as Bundling $. Not exhaustive -- an
-# unrecognized future line item shows up as a Freight+Bundling sum that
-# doesn't match the invoice's own TOTAL, which is flagged (see
+# unrecognized future line item (a real example: "Pickup Samples to
+# testing company", confirmed 2026-09-24) is skipped rather than
+# guessed at, and shows up as a Freight+Bundling sum that doesn't match
+# the invoice's own TOTAL, which is flagged (see
 # build_freight_register_rows), not silently dropped.
-_FREIGHT_LINE_ITEM_KEYWORDS = ("DDP Sea Freight", "Remote area surcharge")
+_FREIGHT_LINE_ITEM_KEYWORDS = ("DDP Sea Freight", "DDP Truck Freight", "Remote area surcharge")
 _BUNDLING_LINE_ITEM_KEYWORDS = ("Bundling", "Tape", "Airbags", "Polybags")
-_LINE_ITEM_START_PATTERN = re.compile(
-    "|".join(re.escape(k) for k in _FREIGHT_LINE_ITEM_KEYWORDS + _BUNDLING_LINE_ITEM_KEYWORDS),
-    re.IGNORECASE,
-)
 _LINE_ITEM_AMOUNT_PATTERN = re.compile(r"\$\s*([\d,]+\.\d{2})")
 _SUBTOTAL_STOP_PATTERN = re.compile(r"\bSubtotal\b", re.IGNORECASE)
 
@@ -105,40 +104,72 @@ _SUBTOTAL_STOP_PATTERN = re.compile(r"\bSubtotal\b", re.IGNORECASE)
 _BASE_INVOICE_NUMBER_PATTERN = re.compile(r"^(JG\d+E)(?:-.+)?$")
 
 
+def _classify_line_item(chunk_lower: str) -> str | None:
+    for keyword in _FREIGHT_LINE_ITEM_KEYWORDS:
+        if chunk_lower.startswith(keyword.lower()):
+            return "freight"
+    for keyword in _BUNDLING_LINE_ITEM_KEYWORDS:
+        if chunk_lower.startswith(keyword.lower()):
+            return "bundling"
+    return None
+
+
 def _extract_freight_and_bundling_from_line_items(text: str) -> tuple[Decimal | None, Decimal | None]:
     """Fallback for the newer invoice template, which has no per-section
     subtotal at all -- sums each recognized line item's own extended
-    dollar amount (the LAST "$" figure between it and the next line item
-    or "Subtotal"; earlier ones on the same line are unit rates, e.g.
-    "$2.10 per kgs 404.26 $848.95" -- 848.95 is the one that's wanted)
-    into Freight $ or Bundling $ by its starting keyword.
-    """
-    keyword_matches = list(_LINE_ITEM_START_PATTERN.finditer(text))
-    if not keyword_matches:
-        return None, None
+    dollar amount into Freight $ or Bundling $ by its starting keyword.
 
+    Real text extracts as one "paragraph" (blank-line-delimited chunk)
+    per logical unit -- a single-line item like "Bundling $0.62 per
+    piece 1092 $672.34" is its own chunk; a freight leg splits across
+    two ("DDP Sea Freight SPD LH01281197 Ship to BER8" naming the leg,
+    then "20 CTNS | ... $2.10 per kgs 404.26 $848.95" with its amount).
+    Working chunk-by-chunk (not by finding the next *recognized*
+    keyword, tried first and reverted 2026-09-24) matters because an
+    unrecognized line item can sit between two recognized ones (a real
+    example: "Pickup Samples to testing company $16.00..." right after
+    a real "Bundling $1,184.86..." line) -- reading up to the next
+    recognized keyword would silently swallow that unrelated trailing
+    amount as if it were the preceding line's own total. Chunking stops
+    that at the paragraph boundary instead; an unrecognized chunk is
+    just skipped, surfacing as a shortfall against the invoice's own
+    stated total (see build_freight_register_rows) rather than a wrong
+    number.
+    """
     stop_match = _SUBTOTAL_STOP_PATTERN.search(text)
-    end_of_items = stop_match.start() if stop_match else len(text)
-    freight_keywords_lower = {k.lower() for k in _FREIGHT_LINE_ITEM_KEYWORDS}
+    region = text[:stop_match.start()] if stop_match else text
+    chunks = [c.strip() for c in region.split("\n\n") if c.strip()]
 
     freight_total = Decimal("0")
     bundling_total = Decimal("0")
     found_any_amount = False
-    for i, match in enumerate(keyword_matches):
-        segment_end = keyword_matches[i + 1].start() if i + 1 < len(keyword_matches) else end_of_items
-        segment = text[match.end():segment_end]
-        amounts = _LINE_ITEM_AMOUNT_PATTERN.findall(segment)
-        if not amounts:
+    i = 0
+    while i < len(chunks):
+        bucket = _classify_line_item(chunks[i].lower())
+        if bucket is None:
+            i += 1
             continue
-        try:
-            amount = Decimal(amounts[-1].replace(",", ""))
-        except InvalidOperation:
-            continue
-        found_any_amount = True
-        if match.group(0).lower() in freight_keywords_lower:
-            freight_total += amount
-        else:
-            bundling_total += amount
+
+        amounts = _LINE_ITEM_AMOUNT_PATTERN.findall(chunks[i])
+        if not amounts and i + 1 < len(chunks):
+            # A description-only chunk ("DDP Sea Freight...") -- its
+            # amount is on the next chunk, the detail line. Consume it
+            # too so it isn't re-examined as its own (unrecognized) item.
+            i += 1
+            amounts = _LINE_ITEM_AMOUNT_PATTERN.findall(chunks[i])
+
+        if amounts:
+            try:
+                amount = Decimal(amounts[-1].replace(",", ""))
+            except InvalidOperation:
+                amount = None
+            if amount is not None:
+                found_any_amount = True
+                if bucket == "freight":
+                    freight_total += amount
+                else:
+                    bundling_total += amount
+        i += 1
 
     if not found_any_amount:
         return None, None

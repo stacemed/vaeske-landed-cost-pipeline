@@ -100,6 +100,39 @@ def test_sync_freight_register_matches_combined_wire_and_writes_one_joined_invoi
     assert client._rows[6][4] == 8838.66  # untouched
 
 
+def test_sync_freight_register_excludes_an_already_matched_sibling_from_combined_total():
+    # Real bug (2026-09-24): JG20240108E is paid the same calendar day
+    # (2024-01-16) as the unrelated JG20240115E-CA/-US combined wire, but
+    # via its own separate, dedicated Section A row. Folding its amount
+    # into the OTHER pair's combined-total attempt inflated the sum past
+    # what any real Section A row held, leaving all three unmatched.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 990.04],
+        7: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 8838.66],
+        170: ["", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+        _row("JG20240115E-CA", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("2044.32"), bundling_amount=Decimal("277.26")),
+        _row("JG20240115E-US", invoice_date=date(2024, 1, 15), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("5659.54"), bundling_amount=Decimal("857.54")),
+    ]
+
+    new_rows, updated_rows, backfills = sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    by_number = {row.invoice_number: match_row for row, match_row, _status in backfills}
+    assert by_number["JG20240108E"] == 6
+    assert by_number["JG20240115E-CA"] == 7
+    assert by_number["JG20240115E-US"] == 7
+    assert client._rows[6][3] == "JG20240108E"
+    assert client._rows[7][3] == "JG20240115E-CA, JG20240115E-US"
+
+
 def test_sync_freight_register_does_not_guess_when_no_combined_match_exists():
     # Two same-day invoices whose combined total matches nothing in
     # Section A -- must stay unmatched, not guess at a partial/wrong sum.
