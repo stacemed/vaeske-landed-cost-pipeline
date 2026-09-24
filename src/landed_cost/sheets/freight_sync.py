@@ -105,16 +105,26 @@ def sync_freight_register(
     row matches a $876.88 Freight + $113.16 Bundling invoice exactly).
 
     When a row's own total doesn't match anything by itself, it also
-    tries the COMBINED total of every register row sharing its exact
-    Paid date -- confirmed against real data that several Freight
-    invoices routinely get paid together in one wire (both region-
-    suffixed invoices sharing a base number, e.g. $2,321.58 +
-    $6,517.08 = $8,838.66 matching one real Section A row exactly; and
+    tries the COMBINED total of every OTHER still-unmatched register row
+    sharing its exact Paid date -- confirmed against real data that
+    several Freight invoices routinely get paid together in one wire
+    (both region-suffixed invoices sharing a base number, e.g. $2,321.58
+    + $6,517.08 = $8,838.66 matching one real Section A row exactly; and
     entirely separate invoice numbers that just happened to be paid
     together). Matches only on an exact combined sum (never guesses
     which subset of same-day invoices belong together), and writes ONE
     comma-joined Invoice # value listing every contributing invoice, not
     a last-write-wins overwrite from separate single-cell writes.
+
+    Resolved in two passes -- every row's own single-invoice match is
+    tried first, and only THEN is the combined-total pass run using the
+    rows that are still unmatched. A real bug found doing this in one
+    pass (2026-09-24): a same-day sibling that already matched its OWN
+    dedicated Section A row (e.g. JG20240108E, individually matched)
+    still got folded into another sibling's combined-total attempt
+    (JG20240115E-CA/-US, a genuinely separate wire that only coincided
+    on the same calendar date), inflating the sum past what any real
+    Section A row held and leaving both unmatched.
 
     ``sort``, only meaningful together with ``apply`` and only when there
     are new rows to insert, sorts the whole Section D range by Paid date
@@ -149,28 +159,36 @@ def sync_freight_register(
     # cases -- a caller shouldn't have to apply first to find out.
     section_a_rows = read_section_a_rows(client, spreadsheet_id, sheet_name, section_a_start_row)
 
-    # Rows with a known total and Paid date, grouped by that date -- the
-    # candidate pool for combined-wire matching below.
-    matchable_rows = [
+    # Pass 1: every row's own single-invoice match.
+    single_match_results: dict[str, tuple[int | None, str]] = {}
+    for row in register_rows:
+        if row.freight_amount is None or row.bundling_amount is None or row.paid_date is None:
+            single_match_results[row.invoice_number] = (None, "skipped -- no amount/paid date to match on")
+            continue
+        own_amount = row.freight_amount + row.bundling_amount
+        single_match_results[row.invoice_number] = match_section_a_row(
+            row.paid_date, own_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
+        )
+
+    # Pass 2: for rows still unmatched, try the combined total of every
+    # OTHER still-unmatched row sharing the same Paid date -- excluding
+    # any sibling that already matched its own dedicated Section A row
+    # in pass 1, which would inflate the sum past any real wire total
+    # (see the docstring above for the real case this fixes).
+    unmatched_rows = [
         row for row in register_rows
         if row.freight_amount is not None and row.bundling_amount is not None and row.paid_date is not None
+        and single_match_results[row.invoice_number][0] is None
     ]
-    rows_by_paid_date: dict[object, list[FreightRegisterRow]] = {}
-    for row in matchable_rows:
-        rows_by_paid_date.setdefault(row.paid_date, []).append(row)
+    unmatched_by_paid_date: dict[object, list[FreightRegisterRow]] = {}
+    for row in unmatched_rows:
+        unmatched_by_paid_date.setdefault(row.paid_date, []).append(row)
 
     section_a_backfills: list[tuple[FreightRegisterRow, int | None, str]] = []
     for row in register_rows:
-        if row.freight_amount is None or row.bundling_amount is None or row.paid_date is None:
-            section_a_backfills.append((row, None, "skipped -- no amount/paid date to match on"))
-            continue
-
-        own_amount = row.freight_amount + row.bundling_amount
-        match_row, status = match_section_a_row(
-            row.paid_date, own_amount, section_a_rows, Category.FREIGHT_BUNDLING_PACKAGING
-        )
+        match_row, status = single_match_results[row.invoice_number]
         if match_row is None:
-            siblings = rows_by_paid_date.get(row.paid_date, [])
+            siblings = unmatched_by_paid_date.get(row.paid_date, [])
             if len(siblings) > 1:
                 combined_amount = sum(
                     (r.freight_amount + r.bundling_amount for r in siblings), Decimal("0")

@@ -193,6 +193,68 @@ Subtotal $2,144.19
 TOTAL US$2,144.19
 """
 
+# Real text confirmed against an actual JG20241104E invoice (2026-09-24)
+# -- an UNRECOGNIZED line item ("Pickup Samples...") sits right after
+# the real Bundling line, before Subtotal. Real bug this guards against:
+# a naive "read up to the next RECOGNIZED keyword" approach swallowed
+# this trailing line into the Bundling line's own segment and picked up
+# its $16.00 instead of Bundling's real $1,184.86 -- silently wrong by
+# over $1,000, not just a rounding gap.
+NEW_TEMPLATE_TRAILING_UNRECOGNIZED_ITEM_TEXT = """John Grattan JG20241104E
+
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20241104E US$14,991.20 INVOICE DATE 16-Oct-2024 DUE DATE 5-Nov-2024
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+
+DDP Sea Freight SPD LH01412045 Ship to BER8
+
+10 CTNS | 119 KGS | 1.2 CBM $1.89 per kgs 203 $383.67
+
+DDP Sea Freight LTL LH01412036 Ship to YHM1
+
+27 CTNS | 306 KGS | 3.28 CBM $1.31 per kgs 547 $716.57
+
+Bundling 1726units $1,184.86 flat rate 1 $1,184.86
+
+Pickup Samples to testing company $16.00 flat rate 1 $16.00
+
+Subtotal $2,301.10
+
+THANK YOU FOR YOUR BUSINESS TOTAL US$2,301.10
+"""
+
+# Real text confirmed against an actual JG20260424E invoice (2026-09-24)
+# -- uses "DDP Truck Freight" (not "DDP Sea Freight") for one leg, a
+# real shipping-mode variant this extractor didn't originally recognize.
+NEW_TEMPLATE_TRUCK_FREIGHT_TEXT = """John Grattan Invoice JG20260424E
+
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20260424E US$4,663.47 INVOICE DATE 24-Apr-2026 DUE DATE 27-Apr-2026
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+
+DDP Truck Freight SPD LH2617400285 Ship to HAJ1
+
+35 CTNS | 395 KGS | 4.25 CBM $2.43 per kgs 709 $1,722.87
+
+DDP Sea Freight LTL LH2617400061 Ship to IUSF
+
+111 CTNS | 1,120 KGS | 11.72 CBM $1.02 per kgs 1954 $1,993.08
+
+DDP Sea Freight LTL LH2617400052 Ship to YEG1
+
+25 CTNS | 204 KGS | 2.59 CBM $1.28 per kgs 432 $552.96
+
+Bundling 538units $394.56 flat rate 1 $394.56
+
+Subtotal $4,663.47
+
+THANK YOU FOR YOUR BUSINESS TOTAL US$4,663.47
+"""
+
 
 def _doc(filename: str) -> SourceDocument:
     return SourceDocument.from_filename(filename)
@@ -224,6 +286,45 @@ def test_extract_freight_and_bundling_new_template_sums_packaging_materials():
     assert freight == Decimal("1433.79")
     # Tape + Airbags + Polybags + Bundling, all routed to Bundling $.
     assert bundling == Decimal("710.40")
+
+
+def test_extract_freight_and_bundling_skips_unrecognized_trailing_line_item():
+    # Real bug (2026-09-24): a naive "read to the next RECOGNIZED
+    # keyword" approach absorbed the trailing "Pickup Samples...
+    # $16.00" line into the preceding Bundling line's own segment and
+    # picked up ITS amount instead -- Bundling came out as $16.00, not
+    # the real $1,184.86. Chunking by paragraph must isolate Bundling's
+    # own line and skip the unrecognized one entirely.
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_TRAILING_UNRECOGNIZED_ITEM_TEXT)
+
+    assert freight == Decimal("1100.24")
+    assert bundling == Decimal("1184.86")
+
+
+def test_extract_freight_and_bundling_recognizes_truck_freight():
+    # Real bug (2026-09-24): "DDP Truck Freight" wasn't a recognized
+    # keyword, so that whole line item (a real $1,722.87 leg) was
+    # invisible to extraction entirely.
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_TRUCK_FREIGHT_TEXT)
+
+    assert freight == Decimal("4268.91")  # 1722.87 + 1993.08 + 552.96
+    assert bundling == Decimal("394.56")
+
+
+def test_build_freight_register_rows_flags_shortfall_from_unrecognized_line_item():
+    # The $16 Pickup Samples line is skipped, so the extracted sum comes
+    # up exactly $16 short of the invoice's own stated total -- flagged,
+    # not silently accepted, so a human adds it in by hand.
+    documents = [
+        (_doc("2024-10-16_FBSL_Frei-Bund_JG20241104E_INV-paid.pdf"), NEW_TEMPLATE_TRAILING_UNRECOGNIZED_ITEM_TEXT),
+    ]
+
+    rows = build_freight_register_rows(documents)
+
+    assert rows[0].freight_amount == Decimal("1100.24")
+    assert rows[0].bundling_amount == Decimal("1184.86")
+    assert rows[0].flagged is True
+    assert "may not have been recognized" in rows[0].flag_reason
 
 
 def test_extract_invoice_total_ignores_sub_total_lines_on_old_template():
