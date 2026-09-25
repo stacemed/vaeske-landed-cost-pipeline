@@ -81,6 +81,34 @@ def test_match_section_a_row_never_overwrites_an_already_filled_invoice_number()
     assert "no matching" in status
 
 
+def test_match_section_a_row_tolerates_a_cent_of_rounding():
+    # Real case (2026-09-25): a Freight invoice's line items summed to
+    # $12,365.39, but the invoice's own stated total AND the real
+    # Section A amount both landed at $12,365.38 -- real vendor
+    # per-line rounding, not a wrong extraction.
+    section_a = [
+        SectionATransaction(row_number=6, category=Category.OVERHEAD, date=date(2024, 1, 11),
+                             amount=Decimal("12365.38"), invoice_number=""),
+    ]
+
+    match_row, status = match_section_a_row(date(2024, 1, 11), Decimal("12365.39"), section_a, Category.OVERHEAD)
+
+    assert match_row == 6
+    assert status == "matched"
+
+
+def test_match_section_a_row_does_not_tolerate_more_than_a_cent():
+    section_a = [
+        SectionATransaction(row_number=6, category=Category.OVERHEAD, date=date(2024, 1, 11),
+                             amount=Decimal("218.00"), invoice_number=""),
+    ]
+
+    match_row, status = match_section_a_row(date(2024, 1, 11), Decimal("218.02"), section_a, Category.OVERHEAD)
+
+    assert match_row is None
+    assert "no matching" in status
+
+
 def test_match_section_a_row_flags_ambiguous_matches_instead_of_guessing():
     section_a = [
         SectionATransaction(row_number=6, category=Category.OVERHEAD, date=date(2024, 1, 5),

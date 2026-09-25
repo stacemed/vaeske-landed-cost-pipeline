@@ -111,8 +111,10 @@ def sync_freight_register(
     (both region-suffixed invoices sharing a base number, e.g. $2,321.58
     + $6,517.08 = $8,838.66 matching one real Section A row exactly; and
     entirely separate invoice numbers that just happened to be paid
-    together). Matches only on an exact combined sum (never guesses
-    which subset of same-day invoices belong together), and writes ONE
+    together). Matches only within a cent of the combined sum (same
+    rounding tolerance as the single-invoice match -- see
+    section_a_backfill.match_section_a_row; never guesses which subset
+    of same-day invoices belong together beyond that), and writes ONE
     comma-joined Invoice # value listing every contributing invoice, not
     a last-write-wins overwrite from separate single-cell writes.
 

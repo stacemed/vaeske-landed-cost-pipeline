@@ -74,6 +74,9 @@ def read_section_a_rows(
     return rows
 
 
+_AMOUNT_TOLERANCE = Decimal("0.01")
+
+
 def match_section_a_row(
     paid_date: date_cls,
     amount: Decimal,
@@ -82,18 +85,23 @@ def match_section_a_row(
 ) -> tuple[int | None, str]:
     """Find the one Section A row this register row's payment belongs to.
 
-    Matches on: same category, exact amount, same year+month (day may
-    differ -- a wire's "sent" date and a document's own date are often a
-    day or two apart), and -- critically -- an Invoice # that's
-    currently BLANK, so this never overwrites a value already filled in
-    (by hand or a previous run). Zero or multiple candidates both return
-    no row number: never guess, per the project's standing rule.
+    Matches on: same category, amount within a cent (real invoice line
+    items sometimes round to a total a cent off the true sum -- confirmed
+    2026-09-25 on a real Freight invoice whose own stated total, AND the
+    real Section A amount, both landed a cent short of the summed line
+    items), same year+month (day may differ -- a wire's "sent" date and
+    a document's own date are often a day or two apart), and --
+    critically -- an Invoice # that's currently BLANK, so this never
+    overwrites a value already filled in (by hand or a previous run).
+    Zero or multiple candidates both return no row number: never guess,
+    per the project's standing rule.
     """
     candidates = [
         r
         for r in section_a_rows
         if r.category == category
-        and r.amount == amount
+        and r.amount is not None
+        and abs(r.amount - amount) <= _AMOUNT_TOLERANCE
         and r.date is not None
         and (r.date.year, r.date.month) == (paid_date.year, paid_date.month)
         and not r.invoice_number
