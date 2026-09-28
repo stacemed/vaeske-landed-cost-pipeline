@@ -105,7 +105,10 @@ _INVOICE_TOTAL_PATTERN = re.compile(r"(?<!SUB )\bTOTAL\s+US\$\s*([\d,]+\.\d{2})"
 # the invoice's own TOTAL, which is flagged (see
 # build_freight_register_rows), not silently dropped.
 _FREIGHT_LINE_ITEM_KEYWORDS = ("DDP Sea Freight", "DDP Truck Freight", "Remote area surcharge")
-_BUNDLING_LINE_ITEM_KEYWORDS = ("Bundling", "Tape", "Airbags", "Polybags")
+# "Air bag" (two words, confirmed 2026-09-28) is a spelling variant of
+# "Airbags" (one word) seen on an earlier invoice -- same real fee, two
+# different renderings across invoices.
+_BUNDLING_LINE_ITEM_KEYWORDS = ("Bundling", "Tape", "Airbags", "Air bag", "Polybags")
 _LINE_ITEM_AMOUNT_PATTERN = re.compile(r"\$\s*([\d,]+\.\d{2})")
 _SUBTOTAL_STOP_PATTERN = re.compile(r"\bSubtotal\b", re.IGNORECASE)
 
@@ -126,6 +129,14 @@ def _classify_line_item(chunk_lower: str) -> str | None:
     for keyword in _BUNDLING_LINE_ITEM_KEYWORDS:
         if chunk_lower.startswith(keyword.lower()):
             return "bundling"
+    # A real item confirmed 2026-09-28 started "Type Ordered On Oct, for
+    # Oct to Dec's bundling $125.00..." -- too generic a leading word
+    # ("Type") to add as its own keyword, but the vendor's own text
+    # explicitly calls it a bundling cost. A freight leg's own
+    # description (a ship-to/weight/CBM line) never mentions "bundling",
+    # so this is a safe, low-risk fallback rather than a guess.
+    if "bundling" in chunk_lower:
+        return "bundling"
     return None
 
 
