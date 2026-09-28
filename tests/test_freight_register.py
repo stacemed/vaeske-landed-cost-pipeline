@@ -291,6 +291,38 @@ Subtotal $4,663.47
 THANK YOU FOR YOUR BUSINESS TOTAL US$4,663.47
 """
 
+# Real text confirmed against an actual JG20241113E invoice (2026-09-28)
+# -- two bundling-related line items phrased differently from anything
+# seen before: "Air bag" (two words, a spelling variant of the
+# one-word "Airbags" keyword) and "Type Ordered On Oct, for Oct to
+# Dec's bundling" -- too generic a leading word ("Type") to hardcode as
+# its own keyword, but the vendor's own text explicitly calls it a
+# bundling cost.
+NEW_TEMPLATE_BUNDLING_VARIANTS_TEXT = """John Grattan JG20241113E
+
+INVOICE Shenzhen Linkhub CO., LTD
+
+INVOICE No. JG20241113E US$3,666.10 INVOICE DATE 13-Nov-2024 DUE DATE 15-Nov-2024
+
+ITEM DESCRIPTION RATE QUANTITY AMOUNT
+
+DDP Sea Freight SPD LH01451662 Ship to BER8
+
+10 CTNS | 104 KGS | 1.18 CBM $1.89 per kgs 197 $372.33
+
+Bundling 348units $233.28 flat rate 1 $233.28
+
+Type Ordered On Oct, for Oct to Dec's bundling $125.00 flat rate 1 $125.00
+
+Air bag Ordered On Oct, for Oct to Dec's bundling $112.00 flat rate 1 $112.00
+
+Polybags Ordered On Oct, for Oct to Dec's bundling $185.00 flat rate 1 $185.00
+
+Subtotal $1,027.61
+
+THANK YOU FOR YOUR BUSINESS TOTAL US$1,027.61
+"""
+
 
 def _doc(filename: str) -> SourceDocument:
     return SourceDocument.from_filename(filename)
@@ -338,6 +370,21 @@ def test_extract_freight_and_bundling_new_template_sums_packaging_materials():
     assert freight == Decimal("1433.79")
     # Tape + Airbags + Polybags + Bundling, all routed to Bundling $.
     assert bundling == Decimal("710.40")
+
+
+def test_extract_freight_and_bundling_recognizes_bundling_phrasing_variants():
+    # Real bug (2026-09-28): a $237 shortfall on a live invoice traced
+    # to two bundling-related line items with unfamiliar phrasing --
+    # "Air bag" (two words, not the recognized one-word "Airbags") and
+    # "Type Ordered On Oct, for Oct to Dec's bundling" (too generic a
+    # leading word to hardcode, but the vendor's own text explicitly
+    # calls it a bundling cost).
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_BUNDLING_VARIANTS_TEXT)
+
+    assert freight == Decimal("372.33")
+    # Bundling (233.28) + Type...bundling (125.00) + Air bag...bundling
+    # (112.00) + Polybags...bundling (185.00).
+    assert bundling == Decimal("655.28")
 
 
 def test_extract_freight_and_bundling_skips_unrecognized_trailing_line_item():
