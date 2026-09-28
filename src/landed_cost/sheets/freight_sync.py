@@ -369,4 +369,22 @@ def sync_freight_register(
         ]
         client.format_row_flags(spreadsheet_id, sheet_id, row_flags, num_columns=12)
 
+        # Real Drive file smart chips for Invoice Link (F, index 5) and
+        # Payment Link (G, index 6) -- written as a pass AFTER the bulk
+        # row write above (which already put invoice_link/payment_link's
+        # plain filename text there), so a row with no known file id for
+        # a given link (invoice_file_ids/payment_file_ids empty) simply
+        # keeps that readable plain text instead of losing it to a blank
+        # cell -- see FreightRegisterRow's docstring.
+        chip_cells = [
+            (final_register_map[row.invoice_number], column_index, file_ids)
+            for row in register_rows
+            if row.invoice_number in final_register_map
+            for column_index, file_ids in (
+                (5, row.invoice_file_ids), (6, row.payment_file_ids)
+            )
+            if file_ids
+        ]
+        client.write_file_chip_cells(spreadsheet_id, sheet_id, chip_cells)
+
     return new_rows, updated_rows, section_a_backfills

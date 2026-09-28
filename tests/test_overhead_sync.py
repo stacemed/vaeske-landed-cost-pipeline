@@ -15,10 +15,12 @@ from sheets_fakes import FakeSheetsClient
 
 
 def _row(invoice_number, invoice_date=None, paid_date=None, amount=None,
-         invoice_link="", payment_link="", flagged=False, flag_reason=""):
+         invoice_link="", payment_link="", invoice_file_ids=None, payment_file_ids=None,
+         flagged=False, flag_reason=""):
     return OverheadRegisterRow(
         invoice_number=invoice_number, invoice_date=invoice_date, paid_date=paid_date,
         amount=amount, invoice_link=invoice_link, payment_link=payment_link,
+        invoice_file_ids=invoice_file_ids or [], payment_file_ids=payment_file_ids or [],
         flagged=flagged, flag_reason=flag_reason,
     )
 
@@ -366,6 +368,45 @@ def test_sync_overhead_register_does_not_reflag_an_invoice_matched_in_a_previous
     assert client._rows[100][6] == ""
     row_flags, _num_columns = client.row_flag_calls[-1]
     assert (100, False) in row_flags
+
+
+def test_sync_overhead_register_writes_smart_chips_for_files_with_known_ids():
+    client = FakeSheetsClient({
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00"), invoice_link="inv.pdf", payment_link="pconf.pdf",
+             invoice_file_ids=["inv-drive-id"], payment_file_ids=["pconf-drive-id"]),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    cells = client.chip_writes[-1]
+    assert (100, 4, ["inv-drive-id"]) in cells  # E = Invoice Link
+    assert (100, 5, ["pconf-drive-id"]) in cells  # F = Payment Link
+
+
+def test_sync_overhead_register_skips_chip_write_when_no_file_id_known():
+    client = FakeSheetsClient({
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00"), invoice_link="inv.pdf", payment_link="pconf.pdf"),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client.chip_writes == [[]]
+    assert client._rows[100][4] == "inv.pdf"
+    assert client._rows[100][5] == "pconf.pdf"
 
 
 def test_sync_overhead_register_writes_flag_reason_header():

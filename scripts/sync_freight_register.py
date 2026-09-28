@@ -57,6 +57,13 @@ Section A backfill that couldn't find or disambiguate a match -- gets a
 reason written into the new "Flag Reason" column (L) and its whole row
 highlighted light red; a clean row's highlight is cleared the same way.
 
+Invoice Link/Payment Link are written as real Drive file smart chips --
+the small icon-bearing, hover-previewable chip Sheets inserts when a
+person types "@" and picks a file, not a plain blue hyperlink -- one per
+filed file, using each file's Drive ID (collected while reading the
+folder, so no extra Drive calls). A link with more than one file shows
+one chip per file, comma-separated.
+
 Without --apply this only prints what it *would* write; nothing on the
 sheet changes.
 
@@ -91,8 +98,9 @@ from landed_cost.sheets.section_headers import (
 
 def _read_freight_documents(
     drive_client: GoogleDriveClient, folder_id: str
-) -> list[tuple[SourceDocument, str]]:
+) -> tuple[list[tuple[SourceDocument, str]], dict[str, str]]:
     documents: list[tuple[SourceDocument, str]] = []
+    file_ids: dict[str, str] = {}
     for child in drive_client.list_children(folder_id):
         if child.is_folder:
             continue
@@ -108,7 +116,8 @@ def _read_freight_documents(
         if used_ocr:
             print(f"  (used OCR -- {child.name} has no real text layer)")
         documents.append((doc, text))
-    return documents
+        file_ids[child.name] = child.id
+    return documents, file_ids
 
 
 def _resolve_prep_sheet_links(
@@ -185,12 +194,12 @@ def main() -> int:
     args = parser.parse_args()
 
     drive_client = GoogleDriveClient.from_authorized_user_file(args.credentials)
-    documents = _read_freight_documents(drive_client, args.freight_folder_id)
+    documents, file_ids = _read_freight_documents(drive_client, args.freight_folder_id)
     if not documents:
         print("No filed documents found (or none matched the filing convention).", file=sys.stderr)
         return 1
 
-    register_rows = build_freight_register_rows(documents)
+    register_rows = build_freight_register_rows(documents, file_ids=file_ids)
 
     if args.prep_sheet_folder_id:
         register_rows = _resolve_prep_sheet_links(drive_client, args.prep_sheet_folder_id, register_rows)

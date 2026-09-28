@@ -29,6 +29,7 @@ class FakeSheetsClient:
         self.inserts: list[tuple[int, int]] = []
         self.sorts: list[tuple[int, int, int, bool, int]] = []
         self.row_flag_calls: list[tuple[list[tuple[int, bool]], int]] = []
+        self.chip_writes: list[list[tuple[int, int, list[str]]]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
         # Matches the real Sheets API: a gap row inside the populated
@@ -107,6 +108,24 @@ class FakeSheetsClient:
         num_columns: int,
     ) -> None:
         self.row_flag_calls.append((list(row_flags), num_columns))
+
+    def write_file_chip_cells(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        cells: list[tuple[int, int, list[str]]],
+    ) -> None:
+        self.chip_writes.append(list(cells))
+        for row_number, column_index, file_ids in cells:
+            existing = list(self._rows.get(row_number, []))
+            while len(existing) <= column_index:
+                existing.append("")
+            # Approximates the real API's read-back for a chip cell
+            # (its own placeholder text) -- nothing in this codebase
+            # parses these specific columns back, so this only matters
+            # for a test asserting on client._rows directly.
+            existing[column_index] = ", ".join(["@"] * len(file_ids)) if file_ids else ""
+            self._rows[row_number] = existing
 
 
 _HYPERLINK_RE = re.compile(r'^=HYPERLINK\("[^"]*",\s*"(.*)"\)$')

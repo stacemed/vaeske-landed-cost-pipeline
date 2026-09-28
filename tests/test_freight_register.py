@@ -426,6 +426,35 @@ def test_build_freight_register_rows_flags_shortfall_from_unrecognized_line_item
     assert "may not have been recognized" in rows[0].flag_reason
 
 
+def test_build_freight_register_rows_populates_file_ids_in_sorted_order():
+    documents = [
+        (_doc("2024-01-12_FBSL_Frei-Bund_JG20240108E_INV-paid.pdf"), INVOICE_TEXT),
+        (_doc("2024-01-16_FBSL_Frei-Bund_JG20240108E_pconf.pdf"), WIRE_CONFIRMATION_TEXT),
+    ]
+    file_ids = {
+        "2024-01-12_FBSL_Frei-Bund_JG20240108E_INV-paid.pdf": "invoice-drive-id",
+        "2024-01-16_FBSL_Frei-Bund_JG20240108E_pconf.pdf": "payment-drive-id",
+    }
+
+    rows = build_freight_register_rows(documents, file_ids=file_ids)
+
+    assert rows[0].invoice_file_ids == ["invoice-drive-id"]
+    assert rows[0].payment_file_ids == ["payment-drive-id"]
+
+
+def test_build_freight_register_rows_leaves_file_ids_empty_without_a_lookup():
+    # No file_ids given at all -- every other test in this file relies
+    # on this staying a no-op default, not an error.
+    documents = [
+        (_doc("2024-01-12_FBSL_Frei-Bund_JG20240108E_INV-paid.pdf"), INVOICE_TEXT),
+    ]
+
+    rows = build_freight_register_rows(documents)
+
+    assert rows[0].invoice_file_ids == []
+    assert rows[0].payment_file_ids == []
+
+
 def test_extract_invoice_total_ignores_sub_total_lines_on_old_template():
     assert extract_invoice_total(INVOICE_TEXT) == Decimal("990.04")
 

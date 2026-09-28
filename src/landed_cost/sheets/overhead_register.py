@@ -31,7 +31,7 @@ import re
 from datetime import date as date_cls
 from decimal import Decimal, InvalidOperation
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..models.documents import SourceDocument
 from ..models.enums import DocumentType
@@ -88,12 +88,18 @@ class OverheadRegisterRow(BaseModel):
     amount: Decimal | None
     invoice_link: str
     payment_link: str
+    # Drive file IDs for invoice_link's/payment_link's own files -- see
+    # freight_register.py's FreightRegisterRow docstring for why these
+    # exist (same reasoning, no combined-wire complication here).
+    invoice_file_ids: list[str] = Field(default_factory=list)
+    payment_file_ids: list[str] = Field(default_factory=list)
     flagged: bool
     flag_reason: str = ""
 
 
 def build_overhead_register_rows(
     documents: list[tuple[SourceDocument, str]],
+    file_ids: dict[str, str] | None = None,
 ) -> list[OverheadRegisterRow]:
     """Group filed Overhead documents by invoice number and build one
     register row per group.
@@ -102,7 +108,13 @@ def build_overhead_register_rows(
     text)`` pair -- callers are responsible for reading each file's text
     (with OCR fallback) before calling this; this function does no I/O,
     so it's fully testable without Drive or PDF dependencies.
+
+    ``file_ids``, an optional ``{raw_filename: drive_file_id}`` lookup,
+    populates each row's ``invoice_file_ids``/``payment_file_ids`` for
+    writing real smart-chip links -- see
+    freight_register.build_freight_register_rows' docstring.
     """
+    file_ids = file_ids or {}
     groups: dict[str, list[tuple[SourceDocument, str]]] = {}
     for doc, text in documents:
         groups.setdefault(doc.invoice_number, []).append((doc, text))
@@ -114,6 +126,12 @@ def build_overhead_register_rows(
 
         invoice_link = ", ".join(sorted(d.raw_filename for d, _ in invoice_items))
         payment_link = ", ".join(sorted(d.raw_filename for d, _ in payment_items))
+        invoice_file_ids = [
+            file_ids[name] for name in sorted(d.raw_filename for d, _ in invoice_items) if name in file_ids
+        ]
+        payment_file_ids = [
+            file_ids[name] for name in sorted(d.raw_filename for d, _ in payment_items) if name in file_ids
+        ]
 
         invoice_date = invoice_items[0][0].doc_date if invoice_items else None
         payment_dates = [d.doc_date for d, _ in payment_items]
@@ -151,6 +169,8 @@ def build_overhead_register_rows(
                 amount=amount,
                 invoice_link=invoice_link,
                 payment_link=payment_link,
+                invoice_file_ids=invoice_file_ids,
+                payment_file_ids=payment_file_ids,
                 flagged=flagged,
                 flag_reason=flag_reason,
             )
