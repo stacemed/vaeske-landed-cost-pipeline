@@ -32,6 +32,15 @@ is a fixed, machine-generated template -- see overhead_register.py's
 docstring. When it still fails for a given invoice, that row is written
 with a blank Overhead $ and flagged; fill it in by hand.
 
+Every --apply run also cross-links the register to Section A: each
+invoice's own Invoice # cell becomes a clickable link to its matched
+Section A row, and vice versa (self-healing -- a link that goes stale
+because a row moved, e.g. from --sort, gets corrected the next time this
+runs). A row needing review -- a genuine extraction problem, or a
+Section A backfill that couldn't find or disambiguate a match -- gets a
+reason written into the new "Flag Reason" column (G) and its whole row
+highlighted light red; a clean row's highlight is cleared the same way.
+
 Without --apply this only prints what it *would* write; nothing on the
 sheet changes.
 

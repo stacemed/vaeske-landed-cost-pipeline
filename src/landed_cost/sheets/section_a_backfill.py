@@ -111,3 +111,42 @@ def match_section_a_row(
     if len(candidates) > 1:
         return None, f"{len(candidates)} matching Section A transactions found -- ambiguous, left blank"
     return candidates[0].row_number, "matched"
+
+
+def review_reason(
+    already_flagged: bool,
+    existing_flag_reason: str,
+    match_status: str,
+    invoice_number: str,
+    section_a_rows: list[SectionATransaction],
+) -> str:
+    """The single reason (if any) a register row needs a human to look
+    at it, for writing into its sheet's "Flag Reason" column and
+    driving its highlight -- shared by every register sync
+    (freight_sync.py, overhead_sync.py).
+
+    Prefers the register row's own extraction-level flag (a missing
+    amount, an invoice-total mismatch, ...) when there is one. Otherwise
+    a Section A backfill ``match_status`` of "no matching..." or
+    "N matching... ambiguous" is a genuine problem worth surfacing --
+    but NOT when ``invoice_number`` is already present in some Section
+    A row's Invoice # (comma-split, so a combined-wire cell counts too).
+    That case also produces a "no matching" status from
+    ``match_section_a_row`` (its blank-Invoice#-only candidate filter
+    can no longer see a row it already matched), which would otherwise
+    falsely re-flag every previously-matched invoice on every future
+    run. "matched"/"matched as part of..." and "skipped -- no
+    amount/paid date to match on" (nothing filed to match against yet,
+    not a problem) are never flagged.
+    """
+    if already_flagged:
+        return existing_flag_reason
+    if match_status.startswith("matched") or match_status.startswith("skipped"):
+        return ""
+    already_linked = any(
+        r.invoice_number and invoice_number in (t.strip() for t in r.invoice_number.split(","))
+        for r in section_a_rows
+    )
+    if already_linked:
+        return ""
+    return match_status

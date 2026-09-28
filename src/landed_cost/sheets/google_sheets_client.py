@@ -98,6 +98,41 @@ class GoogleSheetsClient:
         }
         self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
 
+    def format_row_flags(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        row_flags: list[tuple[int, bool]],
+        num_columns: int,
+    ) -> None:
+        if not row_flags:
+            return
+        flagged_color = {"red": 0.96, "green": 0.80, "blue": 0.80}  # light red
+        clear_color = {"red": 1.0, "green": 1.0, "blue": 1.0}  # white
+        requests = [
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row_number - 1,
+                        "endRowIndex": row_number,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": num_columns,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": flagged_color if flagged else clear_color
+                        }
+                    },
+                    "fields": "userEnteredFormat.backgroundColor",
+                }
+            }
+            for row_number, flagged in row_flags
+        ]
+        self._service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id, body={"requests": requests}
+        ).execute()
+
     def sort_range(
         self,
         spreadsheet_id: str,

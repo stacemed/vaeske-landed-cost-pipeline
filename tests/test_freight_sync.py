@@ -197,8 +197,8 @@ def test_sync_freight_register_sort_sorts_whole_section_d_by_paid_date():
         register_rows=rows, apply=True, sort=True,
     )
 
-    # column index 2 = Paid date, num_columns=11 -- Section D's full A:K range.
-    assert client.sorts == [(170, 171, 2, True, 11)]
+    # column index 2 = Paid date, num_columns=12 -- Section D's full A:L range.
+    assert client.sorts == [(170, 171, 2, True, 12)]
 
 
 def test_sync_freight_register_backfill_skipped_when_amounts_missing():
@@ -218,6 +218,172 @@ def test_sync_freight_register_backfill_skipped_when_amounts_missing():
     )
 
     assert backfills == [(rows[0], None, "skipped -- no amount/paid date to match on")]
+
+
+def test_sync_freight_register_cross_links_invoice_number_and_section_a_cell():
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 990.04],
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    # Column A of the register row is a HYPERLINK formula targeting its
+    # matched Section A row -- not just plain text that happens to
+    # evaluate to the same string (client._rows would look the same
+    # either way, since the fake resolves a HYPERLINK cell to its label
+    # on read, matching the real API's UNFORMATTED_VALUE behavior).
+    d_write = next(
+        values[0][0] for a1_range, values in client.updates
+        if a1_range == "'1 TRANSACTIONS'!A170:L170"
+    )
+    assert d_write == '=HYPERLINK("#gid=12345&range=D6", "JG20240108E")'
+
+    # And Section A's own Invoice # cell links back to the register row.
+    a_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert a_write == '=HYPERLINK("#gid=12345&range=A170", "JG20240108E")'
+
+
+def test_sync_freight_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
+    # Section A row 6 is ALREADY linked (from a previous run) to
+    # JG20240301E, currently sitting at Section D row 170, via a link
+    # that points at row 170. This run inserts a brand-new invoice
+    # ahead of it, which (via the insert-at-last-row trick) pushes
+    # JG20240301E down to row 171 -- the stale link must be rewritten
+    # to point at 171, or clicking it would land on the wrong invoice.
+    client = FakeSheetsClient({
+        # Real reads never return formula source (see _evaluate_cell) --
+        # a HYPERLINK cell written by an earlier run reads back as just
+        # its label, "JG20240301E", exactly like plain text would.
+        6: ["Freight / bundling / packaging", "2024-03-01", "FBA Bee", "JG20240301E", 500.00],
+        170: ["JG20240301E", "02/25/2024", "03/01/2024", 450.0, 50.0, "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240102E", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
+             freight_amount=Decimal("100.00"), bundling_amount=Decimal("10.00")),
+        _row("JG20240301E", invoice_date=date(2024, 2, 25), paid_date=date(2024, 3, 1),
+             freight_amount=Decimal("450.00"), bundling_amount=Decimal("50.00")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[170][0] == "JG20240102E"
+    assert client._rows[171][0] == "JG20240301E"
+    d6_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert d6_write == '=HYPERLINK("#gid=12345&range=A171", "JG20240301E")'
+
+
+def test_sync_freight_register_does_not_touch_a_link_on_a_different_category_row():
+    # Section A row 7 is an OVERHEAD row (not Freight), already linked
+    # by overhead_sync.py to an Overhead invoice. A Freight sync run
+    # must never "refresh" it -- it can't find that invoice number in
+    # ITS OWN register (Section D), so without the category filter it
+    # would fall back to overwriting the existing link with plain text,
+    # silently breaking a cross-link a completely different script
+    # wrote correctly.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "", 990.04],
+        7: ["Overhead", "2024-01-11", "Weimin Huang", "Inspection-240112", 218.0],
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[7][3] == "Inspection-240112"
+    assert not any(
+        a1_range == "'1 TRANSACTIONS'!D7" for a1_range, _values in client.updates
+    )
+
+
+def test_sync_freight_register_writes_flag_reason_and_highlights_flagged_rows():
+    client = FakeSheetsClient({
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=None, bundling_amount=None, flagged=True,
+             flag_reason="could not extract Freight $/Bundling $ -- fill in by hand"),
+        # No paid_date -- backfill is "skipped", not a problem, so this
+        # clean row's Flag Reason must stay blank.
+        _row("JG20240301E", invoice_date=date(2024, 3, 1), paid_date=None,
+             freight_amount=Decimal("50.00"), bundling_amount=Decimal("5.00")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[170][11] == "could not extract Freight $/Bundling $ -- fill in by hand"
+    assert client._rows[171][11] == ""
+    row_flags, num_columns = client.row_flag_calls[-1]
+    assert num_columns == 12
+    assert (170, True) in row_flags
+    assert (171, False) in row_flags
+
+
+def test_sync_freight_register_does_not_reflag_an_invoice_matched_in_a_previous_run():
+    # Section A row 6 was already matched to JG20240108E by an earlier
+    # run. match_section_a_row's blank-Invoice#-only candidate filter
+    # can no longer see it, which on its own looks identical to "no
+    # matching Section A transaction found" -- without review_reason's
+    # already-linked check, this would wrongly re-flag a perfectly
+    # fine, already-matched row on every future run.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "JG20240108E", 990.04],
+        170: ["JG20240108E", "01/12/2024", "01/16/2024", 876.88, 113.16, "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[170][11] == ""
+    row_flags, _num_columns = client.row_flag_calls[-1]
+    assert (170, False) in row_flags
+
+
+def test_sync_freight_register_writes_flag_reason_header():
+    client = FakeSheetsClient({
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[169][11] == "Flag Reason"
 
 
 def test_sync_freight_register_dry_run_previews_backfill_without_writing():

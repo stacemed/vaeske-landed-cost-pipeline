@@ -48,6 +48,15 @@ flagged otherwise. Omit it to skip that lookup entirely and leave "Prep
 sheet link" blank on every row (the "Prep sheet" month label is always
 filled in either way, since it's computed, not looked up).
 
+Every --apply run also cross-links the register to Section A: each
+invoice's own Invoice # cell becomes a clickable link to its matched
+Section A row, and vice versa (self-healing -- a link that goes stale
+because a row moved, e.g. from --sort, gets corrected the next time this
+runs). A row needing review -- a genuine extraction problem, or a
+Section A backfill that couldn't find or disambiguate a match -- gets a
+reason written into the new "Flag Reason" column (L) and its whole row
+highlighted light red; a clean row's highlight is cleared the same way.
+
 Without --apply this only prints what it *would* write; nothing on the
 sheet changes.
 

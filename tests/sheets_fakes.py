@@ -28,6 +28,7 @@ class FakeSheetsClient:
         self.updates: list[tuple[str, list[list[object]]]] = []
         self.inserts: list[tuple[int, int]] = []
         self.sorts: list[tuple[int, int, int, bool, int]] = []
+        self.row_flag_calls: list[tuple[list[tuple[int, bool]], int]] = []
 
     def get_values(self, spreadsheet_id: str, a1_range: str) -> list[list[object]]:
         # Matches the real Sheets API: a gap row inside the populated
@@ -56,8 +57,17 @@ class FakeSheetsClient:
             while len(existing) < needed_len:
                 existing.append("")
             for j, v in enumerate(row_values):
-                existing[start_col + j] = v
+                existing[start_col + j] = _evaluate_cell(v)
             self._rows[row_number] = existing
+        # Logs the RAW values exactly as passed in (formula text and
+        # all) -- unlike self._rows/get_values, which store the
+        # evaluated value, matching the real API's UNFORMATTED_VALUE
+        # (a =HYPERLINK(url, label) cell reads back as just ``label``,
+        # never the formula source). A test asserting on the formula
+        # itself (e.g. that it targets the right row) reads self.updates;
+        # a test asserting on what a subsequent read would see (e.g.
+        # read_existing_d_register parsing an Invoice # column) goes
+        # through get_values, i.e. self._rows.
         self.updates.append((a1_range, values))
 
     def get_sheet_id(self, spreadsheet_id: str, sheet_name: str) -> int:
@@ -88,6 +98,26 @@ class FakeSheetsClient:
         )
         for i, row in enumerate(rows_in_range):
             self._rows[start_row + i] = row
+
+    def format_row_flags(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        row_flags: list[tuple[int, bool]],
+        num_columns: int,
+    ) -> None:
+        self.row_flag_calls.append((list(row_flags), num_columns))
+
+
+_HYPERLINK_RE = re.compile(r'^=HYPERLINK\("[^"]*",\s*"(.*)"\)$')
+
+
+def _evaluate_cell(value: object) -> object:
+    if isinstance(value, str):
+        match = _HYPERLINK_RE.match(value)
+        if match:
+            return match.group(1)
+    return value
 
 
 _CELL_RE = re.compile(r"([A-Z]+)(\d+)")
