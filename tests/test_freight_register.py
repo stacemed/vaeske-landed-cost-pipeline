@@ -150,6 +150,42 @@ Subtotal $12,365.38
 THANK YOU FOR YOUR BUSINESS TOTAL US$12,365.38
 """
 
+# The exact same JG20240711E invoice, but as pypdf's OWN extract_text()
+# actually returns it (confirmed 2026-09-28) -- single newlines between
+# every line, no blank-line separation between items at all. Real bug
+# this guards against: every fixture above came from Google Drive's own
+# PDF-to-text conversion, which inserts a blank line between items; the
+# live script reads PDFs with pypdf directly, and splitting on "\n\n"
+# found zero boundaries in text shaped like this -- the whole invoice
+# collapsed into one unrecognized blob and a real, live invoice's
+# extraction silently returned nothing instead of a value or a flag.
+NEW_TEMPLATE_INVOICE_TEXT_SINGLE_NEWLINE = (
+    "1\nINVOICE\nShenzhen Linkhub CO., L TD\nRoom 1801, Building 1, Wanting Building\n"
+    "Labor Community, Xixiang Street, Bao'an District\n518102, Shenzhen, Guangdong Province, China\n"
+    "INVOICE No. JG20240711E\nUS$12,365.38INVOICE DATE 12-Jul-2024\nDUE DATE 13-Jul-2024\n"
+    "BILL TO\nJohn Grattan\nITEM DESCRIPTION RATE QUANTITY AMOUNT\n"
+    "DDP Sea Freight SPD LH01281197 Ship to BER8\n"
+    "20 CTNS  |  224 KGS  |  2.42 CBM $2.10 per kgs 404.26 $848.95\n"
+    "DDP Sea Freight L TL LH01281180 Ship to Vaeske C/O A&M Prep Services\n"
+    "155 CTNS  |  1280.5 KGS  |  16.02 CBM $1.16 per kgs 2670 $3,097.20\n"
+    "DDP Sea Freight SPD LH01281136 Ship to SCK8\n"
+    "22 CTNS  |  251.9 KGS  |  2.647 CBM $1.62 per kgs 441.8 $715.72\n"
+    "DDP Sea Freight L TL LH01281121 Ship to BWI4\n"
+    "77 CTNS  |  618.2 KGS  |  7.96 CBM $1.54 per kgs 1327 $2,043.58\n"
+    "DDP Sea Freight L TL LH01281113 Ship to LFT1\n"
+    "82 CTNS  |  697.3 KGS  |  8.48 CBM $1.69 per kgs 1413 $2,387.97\n"
+    "DDP Sea Freight L TL LH01281104 Ship to SLC2\n"
+    "61 CTNS  |  469.5 KGS  |  6.31 CBM $1.59 per kgs 1051 $1,671.09\n"
+    "DDP Sea Freight L TL LH01281093 Ship to YYZ3\n"
+    "15 CTNS  |  142.5 KGS  |  1.8 CBM $1.74 per kgs 259 $450.66\n"
+    "DDP Sea Freight L TL LH01281082 Ship to YOW3\n"
+    "10 CTNS  |  117 KGS  |  1.21 CBM $1.82 per kgs 202.13 $367.88\n"
+    "Bundling $0.62 per piece 1092 $672.34\n"
+    "Remote area surcharge Remote area Fee of SCK8 $5.00 22 $110.00\n"
+    "Subtotal $12,365.38\n"
+    "THANK YOU FOR YOUR BUSINESS                                                TOTAL US$12,365.38\n"
+)
+
 # Real text confirmed against an actual JG20260119E invoice (2026-09-22) --
 # same newer template, this time with packaging-material line items
 # (Tape/Airbags/Polybags) instead of a surcharge. Sums exactly to the
@@ -276,6 +312,22 @@ def test_extract_freight_and_bundling_new_template_sums_line_items_with_surcharg
     freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_INVOICE_TEXT)
 
     # 8 freight legs + Remote area surcharge, all routed to Freight $.
+    assert freight == Decimal("11693.05")
+    assert bundling == Decimal("672.34")
+
+
+def test_extract_freight_and_bundling_works_on_real_single_newline_pypdf_text():
+    # Real bug (2026-09-28): this is the exact same invoice as
+    # NEW_TEMPLATE_INVOICE_TEXT above, just shaped the way pypdf's own
+    # extract_text() actually returns it (single newlines, no blank
+    # lines between items) rather than how Google Drive's PDF-to-text
+    # conversion returns it (blank-line-separated) -- every fixture in
+    # this file until now was built from the latter, so this extractor
+    # was never actually tested against the real production code path.
+    # A live invoice failed extraction entirely in production before
+    # this was caught and fixed.
+    freight, bundling = extract_freight_and_bundling(NEW_TEMPLATE_INVOICE_TEXT_SINGLE_NEWLINE)
+
     assert freight == Decimal("11693.05")
     assert bundling == Decimal("672.34")
 
