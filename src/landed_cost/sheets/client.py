@@ -110,3 +110,29 @@ class SheetsClient(Protocol):
         showing a stale warning forever.
         """
         ...
+
+    def write_file_chip_cells(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        cells: list[tuple[int, int, list[str]]],
+    ) -> None:
+        """Write each ``(row_number, column_index, drive_file_ids)`` cell
+        as a run of real Drive file smart chips -- the same rich,
+        clickable, icon-bearing chip Sheets inserts when a person types
+        "@" and picks a file by hand, not a plain ``HYPERLINK(...)``
+        formula. One chip per id, comma-separated, via the Sheets API's
+        structural ``updateCells`` request (``values.update`` cannot
+        write a chip at all) -- one ``batchUpdate`` call covering every
+        cell regardless of count.
+
+        An empty ``drive_file_ids`` list clears the cell (blank, no
+        chips) -- callers pass every relevant cell being written this
+        run, same reasoning as ``format_row_flags``.
+
+        A chip's displayed name/icon is resolved LIVE from the Drive
+        file's own current metadata, never from anything this call
+        supplies -- there is no label to keep in sync, and a later
+        rename in Drive shows up automatically.
+        """
+        ...

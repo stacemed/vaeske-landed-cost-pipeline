@@ -76,6 +76,33 @@ def test_build_overhead_register_rows_pairs_invoice_and_payment():
     assert row.flagged is False
 
 
+def test_build_overhead_register_rows_populates_file_ids_in_sorted_order():
+    documents = [
+        (_doc("2024-01-11_WH_Over_Inspection-240112_INV-paid.pdf"), WH_INVOICE_TEXT),
+        (_doc("2024-01-11_WH_Over_Inspection-240112_pconf.pdf"), WISE_PCONF_TEXT),
+    ]
+    file_ids = {
+        "2024-01-11_WH_Over_Inspection-240112_INV-paid.pdf": "invoice-drive-id",
+        "2024-01-11_WH_Over_Inspection-240112_pconf.pdf": "payment-drive-id",
+    }
+
+    rows = build_overhead_register_rows(documents, file_ids=file_ids)
+
+    assert rows[0].invoice_file_ids == ["invoice-drive-id"]
+    assert rows[0].payment_file_ids == ["payment-drive-id"]
+
+
+def test_build_overhead_register_rows_leaves_file_ids_empty_without_a_lookup():
+    documents = [
+        (_doc("2024-01-11_WH_Over_Inspection-240112_INV-paid.pdf"), WH_INVOICE_TEXT),
+    ]
+
+    rows = build_overhead_register_rows(documents)
+
+    assert rows[0].invoice_file_ids == []
+    assert rows[0].payment_file_ids == []
+
+
 def test_build_overhead_register_rows_prefers_payment_confirmation_date_over_invoice_date():
     # Real pattern seen in 2024 data: pconf dated a day after the invoice.
     documents = [

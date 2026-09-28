@@ -13,12 +13,14 @@ from sheets_fakes import FakeSheetsClient
 
 
 def _row(invoice_number, invoice_date=None, paid_date=None, freight_amount=None,
-         bundling_amount=None, invoice_link="", payment_link="", prep_sheet_label="",
-         prep_sheet_link="", flagged=False, flag_reason=""):
+         bundling_amount=None, invoice_link="", payment_link="", invoice_file_ids=None,
+         payment_file_ids=None, prep_sheet_label="", prep_sheet_link="", flagged=False,
+         flag_reason=""):
     return FreightRegisterRow(
         invoice_number=invoice_number, invoice_date=invoice_date, paid_date=paid_date,
         freight_amount=freight_amount, bundling_amount=bundling_amount,
         invoice_link=invoice_link, payment_link=payment_link,
+        invoice_file_ids=invoice_file_ids or [], payment_file_ids=payment_file_ids or [],
         prep_sheet_label=prep_sheet_label, prep_sheet_link=prep_sheet_link,
         flagged=flagged, flag_reason=flag_reason,
     )
@@ -428,6 +430,51 @@ def test_sync_freight_register_does_not_reflag_an_invoice_matched_in_a_previous_
     assert client._rows[170][11] == ""
     row_flags, _num_columns = client.row_flag_calls[-1]
     assert (170, False) in row_flags
+
+
+def test_sync_freight_register_writes_smart_chips_for_files_with_known_ids():
+    client = FakeSheetsClient({
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16"),
+             invoice_link="inv.pdf", payment_link="pconf.pdf",
+             invoice_file_ids=["inv-drive-id"], payment_file_ids=["pconf-drive-id"]),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    cells = client.chip_writes[-1]
+    assert (170, 5, ["inv-drive-id"]) in cells  # F = Invoice Link
+    assert (170, 6, ["pconf-drive-id"]) in cells  # G = Payment Link
+
+
+def test_sync_freight_register_skips_chip_write_when_no_file_id_known():
+    # No invoice_file_ids/payment_file_ids given -- the bulk row write
+    # already put invoice_link/payment_link's plain filename text in
+    # place, and there is no id to chip it with, so it must be left
+    # exactly as the bulk write wrote it, not blanked.
+    client = FakeSheetsClient({
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16"),
+             invoice_link="inv.pdf", payment_link="pconf.pdf"),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client.chip_writes == [[]]
+    assert client._rows[170][5] == "inv.pdf"
+    assert client._rows[170][6] == "pconf.pdf"
 
 
 def test_sync_freight_register_writes_flag_reason_header():

@@ -133,6 +133,56 @@ class GoogleSheetsClient:
             spreadsheetId=spreadsheet_id, body={"requests": requests}
         ).execute()
 
+    def write_file_chip_cells(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        cells: list[tuple[int, int, list[str]]],
+    ) -> None:
+        if not cells:
+            return
+
+        def _cell_data(file_ids: list[str]) -> dict:
+            if not file_ids:
+                return {"userEnteredValue": {"stringValue": ""}, "chipRuns": []}
+            # "@" is a placeholder -- Sheets renders the chip in its
+            # place once the request lands; the literal text between
+            # placeholders (", ") stays as plain separator text.
+            text = ", ".join(["@"] * len(file_ids))
+            chip_runs = []
+            index = 0
+            for i, file_id in enumerate(file_ids):
+                chip_runs.append({
+                    "startIndex": index,
+                    "chip": {
+                        "richLinkProperties": {
+                            "uri": f"https://drive.google.com/file/d/{file_id}/view"
+                        }
+                    },
+                })
+                index += 1  # length of "@"
+                if i < len(file_ids) - 1:
+                    index += 2  # length of ", "
+            return {"userEnteredValue": {"stringValue": text}, "chipRuns": chip_runs}
+
+        requests = [
+            {
+                "updateCells": {
+                    "rows": [{"values": [_cell_data(file_ids)]}],
+                    "start": {
+                        "sheetId": sheet_id,
+                        "rowIndex": row_number - 1,
+                        "columnIndex": column_index,
+                    },
+                    "fields": "userEnteredValue,chipRuns",
+                }
+            }
+            for row_number, column_index, file_ids in cells
+        ]
+        self._service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id, body={"requests": requests}
+        ).execute()
+
     def sort_range(
         self,
         spreadsheet_id: str,

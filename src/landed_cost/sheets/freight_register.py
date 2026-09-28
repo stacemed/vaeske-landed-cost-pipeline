@@ -67,7 +67,7 @@ import re
 from datetime import date as date_cls
 from decimal import Decimal, InvalidOperation
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..models.documents import SourceDocument
 from ..models.enums import DocumentType
@@ -312,6 +312,16 @@ class FreightRegisterRow(BaseModel):
     bundling_amount: Decimal | None
     invoice_link: str
     payment_link: str
+    # Drive file IDs for invoice_link's/payment_link's own files, in the
+    # SAME sorted-by-filename order as those comma-joined strings --
+    # populated only when build_freight_register_rows is given a
+    # filename->id lookup, since this module otherwise does no I/O and
+    # a bare filename carries no Drive ID on its own. Used to write each
+    # linked file as a real clickable smart chip (see freight_sync.py);
+    # empty when unavailable, in which case invoice_link/payment_link's
+    # plain filename text is what actually appears on the sheet.
+    invoice_file_ids: list[str] = Field(default_factory=list)
+    payment_file_ids: list[str] = Field(default_factory=list)
     prep_sheet_label: str
     prep_sheet_link: str = ""
     flagged: bool
@@ -324,6 +334,7 @@ def _prep_sheet_label(d: date_cls) -> str:
 
 def build_freight_register_rows(
     documents: list[tuple[SourceDocument, str]],
+    file_ids: dict[str, str] | None = None,
 ) -> list[FreightRegisterRow]:
     """Group filed Freight documents by invoice number and build one
     register row per group.
@@ -332,7 +343,16 @@ def build_freight_register_rows(
     text)`` pair -- callers are responsible for reading each file's text
     (with OCR fallback) before calling this; this function does no I/O,
     so it's fully testable without Drive or PDF dependencies.
+
+    ``file_ids``, an optional ``{raw_filename: drive_file_id}`` lookup,
+    populates each row's ``invoice_file_ids``/``payment_file_ids`` (same
+    sorted order as ``invoice_link``/``payment_link``'s filenames) for
+    writing real smart-chip links -- a filename missing from it (or the
+    parameter omitted entirely) just means that file's id list stays
+    empty, no different from any other caller that never had Drive
+    access to begin with.
     """
+    file_ids = file_ids or {}
     groups: dict[str, list[tuple[SourceDocument, str]]] = {}
     payments_by_base: dict[str, list[tuple[SourceDocument, str]]] = {}
     for doc, text in documents:
@@ -378,6 +398,12 @@ def build_freight_register_rows(
 
         invoice_link = ", ".join(sorted(d.raw_filename for d, _ in invoice_items))
         payment_link = ", ".join(sorted(d.raw_filename for d, _ in payment_items))
+        invoice_file_ids = [
+            file_ids[name] for name in sorted(d.raw_filename for d, _ in invoice_items) if name in file_ids
+        ]
+        payment_file_ids = [
+            file_ids[name] for name in sorted(d.raw_filename for d, _ in payment_items) if name in file_ids
+        ]
 
         invoice_date = invoice_items[0][0].doc_date if invoice_items else None
         payment_dates = [d.doc_date for d, _ in payment_items]
@@ -456,6 +482,8 @@ def build_freight_register_rows(
                 bundling_amount=bundling_amount,
                 invoice_link=invoice_link,
                 payment_link=payment_link,
+                invoice_file_ids=invoice_file_ids,
+                payment_file_ids=payment_file_ids,
                 prep_sheet_label=prep_sheet_label,
                 flagged=flagged,
                 flag_reason=flag_reason,

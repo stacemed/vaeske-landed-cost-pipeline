@@ -272,4 +272,20 @@ def sync_overhead_register(
         ]
         client.format_row_flags(spreadsheet_id, sheet_id, row_flags, num_columns=7)
 
+        # Real Drive file smart chips for Invoice Link (E, index 4) and
+        # Payment Link (F, index 5) -- see freight_sync.py's equivalent
+        # for why this is a separate pass after the bulk row write, and
+        # why a link with no known file id is simply skipped rather than
+        # blanked.
+        chip_cells = [
+            (final_register_map[row.invoice_number], column_index, file_ids)
+            for row in register_rows
+            if row.invoice_number in final_register_map
+            for column_index, file_ids in (
+                (4, row.invoice_file_ids), (5, row.payment_file_ids)
+            )
+            if file_ids
+        ]
+        client.write_file_chip_cells(spreadsheet_id, sheet_id, chip_cells)
+
     return new_rows, updated_rows, section_a_backfills
