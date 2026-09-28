@@ -119,11 +119,22 @@ def _extract_freight_and_bundling_from_line_items(text: str) -> tuple[Decimal | 
     subtotal at all -- sums each recognized line item's own extended
     dollar amount into Freight $ or Bundling $ by its starting keyword.
 
-    Real text extracts as one "paragraph" (blank-line-delimited chunk)
-    per logical unit -- a single-line item like "Bundling $0.62 per
-    piece 1092 $672.34" is its own chunk; a freight leg splits across
-    two ("DDP Sea Freight SPD LH01281197 Ship to BER8" naming the leg,
-    then "20 CTNS | ... $2.10 per kgs 404.26 $848.95" with its amount).
+    Real text extracts as one logical line per chunk -- a single-line
+    item like "Bundling $0.62 per piece 1092 $672.34" is its own line; a
+    freight leg splits across two ("DDP Sea Freight SPD LH01281197 Ship
+    to BER8" naming the leg, then "20 CTNS | ... $2.10 per kgs 404.26
+    $848.95" with its amount). Splits on a single newline, not a blank
+    line -- a real bug (2026-09-28): every fixture this was built and
+    tested against came from Google Drive's own PDF-to-text conversion,
+    which inserts a blank line between items; the actual script reads
+    PDFs with pypdf directly, whose real output for this same invoice
+    has plain single newlines with no blank-line separation at all, so
+    splitting on "\\n\\n" found zero boundaries and the whole invoice
+    collapsed into one unrecognized blob -- extraction returned nothing
+    for a real, live invoice. A single-newline split still isolates the
+    same items correctly either way (a blank line is just an empty
+    string between two single-newline splits, filtered out below).
+
     Working chunk-by-chunk (not by finding the next *recognized*
     keyword, tried first and reverted 2026-09-24) matters because an
     unrecognized line item can sit between two recognized ones (a real
@@ -131,14 +142,13 @@ def _extract_freight_and_bundling_from_line_items(text: str) -> tuple[Decimal | 
     a real "Bundling $1,184.86..." line) -- reading up to the next
     recognized keyword would silently swallow that unrelated trailing
     amount as if it were the preceding line's own total. Chunking stops
-    that at the paragraph boundary instead; an unrecognized chunk is
-    just skipped, surfacing as a shortfall against the invoice's own
-    stated total (see build_freight_register_rows) rather than a wrong
-    number.
+    that at the line boundary instead; an unrecognized chunk is just
+    skipped, surfacing as a shortfall against the invoice's own stated
+    total (see build_freight_register_rows) rather than a wrong number.
     """
     stop_match = _SUBTOTAL_STOP_PATTERN.search(text)
     region = text[:stop_match.start()] if stop_match else text
-    chunks = [c.strip() for c in region.split("\n\n") if c.strip()]
+    chunks = [c.strip() for c in region.split("\n") if c.strip()]
 
     freight_total = Decimal("0")
     bundling_total = Decimal("0")
