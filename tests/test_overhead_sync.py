@@ -167,9 +167,10 @@ def test_sync_overhead_register_sort_sorts_whole_section_e_by_paid_date():
         register_rows=rows, apply=True, sort=True,
     )
 
-    # column index 2 = Paid date, num_columns=6 -- Section E's full A:F
-    # range, not Section A's 5-column default (would strand Payment Link).
-    assert client.sorts == [(100, 101, 2, True, 6)]
+    # column index 2 = Paid date, num_columns=7 -- Section E's full A:G
+    # range, not Section A's 5-column default (would strand Payment
+    # Link/Flag Reason).
+    assert client.sorts == [(100, 101, 2, True, 7)]
 
 
 def test_sync_overhead_register_sort_does_nothing_without_new_rows():
@@ -211,6 +212,151 @@ def test_sync_overhead_register_updates_existing_row_in_place_without_inserting(
     assert client.inserts == []  # no insert needed for an in-place update
     assert client._rows[100][5] == "pconf.pdf"  # Payment Link now filled in
     assert client._rows[101][0] == "B · BY CATEGORY"  # untouched, didn't shift
+
+
+def test_sync_overhead_register_cross_links_invoice_number_and_section_a_cell():
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-11", "Weimin Huang", "", 218.0],
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    e_write = next(
+        values[0][0] for a1_range, values in client.updates
+        if a1_range == "'1 TRANSACTIONS'!A100:G100"
+    )
+    assert e_write == '=HYPERLINK("#gid=12345&range=D6", "Inspection-240112")'
+
+    a_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert a_write == '=HYPERLINK("#gid=12345&range=A100", "Inspection-240112")'
+
+
+def test_sync_overhead_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
+    # Same real risk as freight_sync's equivalent test: Section A row 6
+    # is already linked (from an earlier run) to Inspection-240301,
+    # currently at Section E row 100. A brand-new invoice inserted
+    # ahead of it (insert-at-last-row) pushes it down to row 101 -- the
+    # stale link must be rewritten, not left pointing at the wrong row.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-03-01", "Weimin Huang", "Inspection-240301", 500.00],
+        100: ["Inspection-240301", "02/25/2024", "03/01/2024", 500.0, "", ""],
+    })
+    rows = [
+        _row("Inspection-240102", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
+             amount=Decimal("100.00")),
+        _row("Inspection-240301", invoice_date=date(2024, 2, 25), paid_date=date(2024, 3, 1),
+             amount=Decimal("500.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[100][0] == "Inspection-240102"
+    assert client._rows[101][0] == "Inspection-240301"
+    d6_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert d6_write == '=HYPERLINK("#gid=12345&range=A101", "Inspection-240301")'
+
+
+def test_sync_overhead_register_does_not_touch_a_link_on_a_different_category_row():
+    # Mirror of freight_sync's equivalent test: Section A row 7 is a
+    # FREIGHT row, already linked by freight_sync.py. An Overhead run
+    # must never refresh/overwrite it.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-11", "Weimin Huang", "", 218.0],
+        7: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "JG20240108E", 990.04],
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[7][3] == "JG20240108E"
+    assert not any(
+        a1_range == "'1 TRANSACTIONS'!D7" for a1_range, _values in client.updates
+    )
+
+
+def test_sync_overhead_register_writes_flag_reason_and_highlights_flagged_rows():
+    client = FakeSheetsClient({
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=None, flagged=True,
+             flag_reason="could not extract a dollar amount -- fill in Overhead $ by hand"),
+        _row("Inspection-240201", invoice_date=date(2024, 2, 1), paid_date=None,
+             amount=Decimal("50.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[100][6] == "could not extract a dollar amount -- fill in Overhead $ by hand"
+    assert client._rows[101][6] == ""
+    row_flags, num_columns = client.row_flag_calls[-1]
+    assert num_columns == 7
+    assert (100, True) in row_flags
+    assert (101, False) in row_flags
+
+
+def test_sync_overhead_register_does_not_reflag_an_invoice_matched_in_a_previous_run():
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-11", "Weimin Huang", "Inspection-240112", 218.0],
+        100: ["Inspection-240112", "01/11/2024", "01/11/2024", 218.0, "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[100][6] == ""
+    row_flags, _num_columns = client.row_flag_calls[-1]
+    assert (100, False) in row_flags
+
+
+def test_sync_overhead_register_writes_flag_reason_header():
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-11", "Weimin Huang", "", 218.0],
+        100: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert client._rows[99][6] == "Flag Reason"
 
 
 def test_sync_overhead_register_dry_run_previews_backfill_without_writing():

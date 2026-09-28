@@ -76,9 +76,10 @@ class SheetsClient(Protocol):
         ``num_columns`` bounds the sorted range to columns A through
         however many that section actually has -- default 5 (A:E)
         matches Section A; a section with a different column count
-        (e.g. Section E's 6, A:F) must pass its own, or a native sort
-        would silently leave that section's last column behind while
-        every other column moves with the sort.
+        (e.g. Section E's 7, A:G, including its Flag Reason column)
+        must pass its own, or a native sort would silently leave that
+        section's last column behind while every other column moves
+        with the sort.
 
         Uses the Sheets API's native sort-range operation (the same
         one "Data > Sort range" runs in the UI), not a read-then-
@@ -87,5 +88,25 @@ class SheetsClient(Protocol):
         while writing sorted values back into a fixed range would
         leave formatting stuck at its old row position, mismatched
         with whatever data now sits there.
+        """
+        ...
+
+    def format_row_flags(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        row_flags: list[tuple[int, bool]],
+        num_columns: int,
+    ) -> None:
+        """Color each row's data columns (A through ``num_columns``) a
+        light red when its ``(row_number, flagged)`` pair is flagged,
+        or clear it back to white when not -- one ``batchUpdate`` call
+        covering every row regardless of count, so a full register
+        sync stays a single extra request.
+
+        Callers pass EVERY row being written this run, not just newly-
+        flagged ones -- a row flagged on a previous run and now clean
+        must have its highlight cleared too, or the sheet would keep
+        showing a stale warning forever.
         """
         ...
