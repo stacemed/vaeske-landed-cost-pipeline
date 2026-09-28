@@ -40,6 +40,16 @@ Confirmed against real 2024-2026 Shenzhen Linkhub / FBSL documents
   own register row (using its own stated Freight $/Bundling $, no
   summing), and every invoice sharing a base number gets the same Paid
   date once that base number's payment confirmation is found.
+- The same file-naming trick also works for several entirely UNRELATED
+  invoices paid in one wire (a real user workflow, confirmed 2026-09-28):
+  name the pconf with every invoice number it covers, hyphen-joined
+  (e.g. ``JG20240614E-JG20240605E-JG20240531E_pconf.pdf``). Every
+  ``JG########E``-shaped token in a payment's own invoice_number is
+  recognized (``_payment_invoice_number_tokens``), not just the first, so
+  each of those invoices independently finds it and they all end up
+  sharing its Paid date -- which is what then lets
+  ``freight_sync.sync_freight_register``'s same-date combined-wire
+  matching find them as a group automatically.
 - A refund invoice (``INV-refund``) posts as a NEGATIVE Freight $ in the
   real sheet (confirmed: -$2,861.85 with $0 Bundling) -- there's no
   separate refund payment document, so Payment Link stays blank.
@@ -102,6 +112,11 @@ _SUBTOTAL_STOP_PATTERN = re.compile(r"\bSubtotal\b", re.IGNORECASE)
 # A base invoice number is "JG" + digits + "E"; anything after that is a
 # per-shipment/region suffix ("-CA", "-US", "-CA+DE", "-Refurn", ...).
 _BASE_INVOICE_NUMBER_PATTERN = re.compile(r"^(JG\d+E)(?:-.+)?$")
+# Unanchored, findall-friendly version -- picks out every "JG########E"
+# token anywhere in a string, e.g. all three of "JG20240614E",
+# "JG20240605E", "JG20240531E" out of one hyphen-joined combined-pconf
+# invoice number. See _payment_invoice_number_tokens.
+_INVOICE_NUMBER_TOKEN_PATTERN = re.compile(r"JG\d+E")
 
 
 def _classify_line_item(chunk_lower: str) -> str | None:
@@ -247,6 +262,30 @@ def base_invoice_number(invoice_number: str) -> str:
     return match.group(1) if match else invoice_number
 
 
+def _payment_invoice_number_tokens(invoice_number: str) -> list[str]:
+    """Every base invoice number a payment confirmation's own
+    invoice_number references -- almost always just one (the base
+    ``base_invoice_number`` already extracts), but a real workflow
+    (confirmed 2026-09-28): the user names a single pconf covering
+    several unrelated invoices paid in one wire with ALL of their
+    numbers hyphen-joined (e.g.
+    ``JG20240614E-JG20240605E-JG20240531E``), not just a region suffix
+    on one of them. Finding every ``JG########E``-shaped token in the
+    string (rather than just the first) means each of those invoices
+    independently finds this same payment via
+    ``build_freight_register_rows``'s ``payments_by_base`` lookup, so
+    they end up sharing its Paid date -- which is what then lets the
+    existing same-date combined-wire matching in freight_sync.py find
+    them without any separate cross-date logic.
+
+    Falls back to ``[base_invoice_number(invoice_number)]`` if no
+    ``JG########E`` token is found at all, so a non-Linkhub-shaped
+    invoice number still gets a single (itself) key rather than none.
+    """
+    tokens = _INVOICE_NUMBER_TOKEN_PATTERN.findall(invoice_number)
+    return tokens if tokens else [base_invoice_number(invoice_number)]
+
+
 class FreightRegisterRow(BaseModel):
     """One row of 1 TRANSACTIONS Section D. ``prep_sheet_link`` is left
     blank here -- filled in by a separate Drive lookup step, since this
@@ -288,15 +327,21 @@ def build_freight_register_rows(
     for doc, text in documents:
         groups.setdefault(doc.invoice_number, []).append((doc, text))
         if doc.doc_type in _PAYMENT_DOC_TYPES:
-            payments_by_base.setdefault(base_invoice_number(doc.invoice_number), []).append((doc, text))
+            for token in _payment_invoice_number_tokens(doc.invoice_number):
+                payments_by_base.setdefault(token, []).append((doc, text))
 
-    # A payment confirmation that only ever pays for OTHER (suffixed)
-    # invoices shares its own invoice_number with none of them -- e.g. a
-    # "JG20240115E_pconf.pdf" paying for "JG20240115E-CA"/"-US" invoices
-    # forms its own group here (invoice_number == "JG20240115E", no
-    # invoice items). That group must not become its own register row --
-    # its dollars are already attributed via payments_by_base below to
-    # the invoices it actually pays for.
+    # A payment confirmation that only ever pays for OTHER invoices
+    # shares its own invoice_number with none of them -- e.g. a
+    # "JG20240115E_pconf.pdf" paying for "JG20240115E-CA"/"-US" invoices,
+    # or a "JG20240614E-JG20240605E-JG20240531E_pconf.pdf" naming three
+    # unrelated invoices paid in one wire -- forms its own group here
+    # (invoice_number == its full filename token, no invoice items).
+    # That group must not become its own register row -- its dollars are
+    # already attributed via payments_by_base below to the invoices it
+    # actually pays for. Checked against every token the payment's own
+    # invoice_number contains (not just the first), so this still works
+    # no matter which of several combined invoice numbers happens to
+    # come first in the filename.
     bases_with_invoices = {
         base_invoice_number(inv_num)
         for inv_num, items in groups.items()
@@ -308,7 +353,9 @@ def build_freight_register_rows(
         invoice_items = [(d, t) for d, t in items if d.doc_type in _INVOICE_DOC_TYPES]
         payment_items = [(d, t) for d, t in items if d.doc_type in _PAYMENT_DOC_TYPES]
 
-        if not invoice_items and base_invoice_number(invoice_number) in bases_with_invoices:
+        if not invoice_items and any(
+            token in bases_with_invoices for token in _payment_invoice_number_tokens(invoice_number)
+        ):
             continue
 
         # Multi-region invoices (a suffixed invoice_number) are paid by
