@@ -253,6 +253,67 @@ def test_sync_freight_register_cross_links_invoice_number_and_section_a_cell():
     assert a_write == '=HYPERLINK("#gid=12345&range=A170", "JG20240108E")'
 
 
+def test_sync_freight_register_links_column_a_for_an_invoice_matched_in_a_previous_run():
+    # Real bug (2026-09-28): match_by_invoice only finds a match among
+    # Section A rows THIS run's own matching pass can still see -- once
+    # matched, Section A's cell is no longer blank, so a LATER run
+    # (where the row is merely re-verified, not newly matched) got
+    # match_row=None and fell back to plain text forever after the
+    # first successful match. Column A never got its link.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-01-16", "FBA Bee", "JG20240108E", 990.04],
+        170: ["JG20240108E", "01/12/2024", "01/16/2024", 876.88, 113.16, "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240108E", invoice_date=date(2024, 1, 12), paid_date=date(2024, 1, 16),
+             freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    d_write = [
+        values[0][0] for a1_range, values in client.updates
+        if a1_range == "'1 TRANSACTIONS'!A170:L170"
+    ][-1]
+    assert d_write == '=HYPERLINK("#gid=12345&range=D6", "JG20240108E")'
+
+
+def test_sync_freight_register_links_column_a_for_each_invoice_in_an_existing_combined_match():
+    # Same bug, combined-wire case: all three invoices already share
+    # Section A row 6 (comma-joined) from an earlier run -- each of
+    # their own register rows must still link to it on a re-verify run.
+    client = FakeSheetsClient({
+        6: ["Freight / bundling / packaging", "2024-06-21", "FBA Bee",
+            "JG20240531E, JG20240605E, JG20240614E", 12000.00],
+        170: ["JG20240531E", "05/31/2024", "06/21/2024", 182.0, 140.0, "", "", "", "", "", "", ""],
+        171: ["JG20240605E", "06/05/2024", "06/21/2024", 1144.36, 68.20, "", "", "", "", "", "", ""],
+        172: ["JG20240614E", "06/14/2024", "06/21/2024", 10395.32, 669.96, "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240531E", invoice_date=date(2024, 5, 31), paid_date=date(2024, 6, 21),
+             freight_amount=Decimal("182.00"), bundling_amount=Decimal("140.00")),
+        _row("JG20240605E", invoice_date=date(2024, 6, 5), paid_date=date(2024, 6, 21),
+             freight_amount=Decimal("1144.36"), bundling_amount=Decimal("68.20")),
+        _row("JG20240614E", invoice_date=date(2024, 6, 14), paid_date=date(2024, 6, 21),
+             freight_amount=Decimal("10395.32"), bundling_amount=Decimal("669.96")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    for row_number, invoice_number in [(170, "JG20240531E"), (171, "JG20240605E"), (172, "JG20240614E")]:
+        write = [
+            values[0][0] for a1_range, values in client.updates
+            if a1_range == f"'1 TRANSACTIONS'!A{row_number}:L{row_number}"
+        ][-1]
+        assert write == f'=HYPERLINK("#gid=12345&range=D6", "{invoice_number}")'
+
+
 def test_sync_freight_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
     # Section A row 6 is ALREADY linked (from a previous run) to
     # JG20240301E, currently sitting at Section D row 170, via a link
