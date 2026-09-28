@@ -173,14 +173,38 @@ def sync_overhead_register(
         for row in register_rows
     }
 
+    # match_by_invoice only finds matches among Section A rows a fresh
+    # match_section_a_row pass can still see -- once an invoice is
+    # matched, its Section A cell is no longer blank, so a LATER run's
+    # own matching pass can no longer find it (same reason review_reason
+    # exists, on the flag side). A register row's own Invoice # link
+    # needs the match regardless of which run discovered it, so this
+    # falls back to Section A's CURRENT state whenever this run found
+    # nothing new.
+    already_linked_row_by_invoice: dict[str, int] = {
+        r.invoice_number.strip(): r.row_number
+        for r in section_a_rows
+        if r.invoice_number and r.category == Category.OVERHEAD
+    }
+    section_a_link_row_by_invoice = {
+        row.invoice_number: (
+            match_by_invoice[row.invoice_number][0]
+            if match_by_invoice[row.invoice_number][0] is not None
+            else already_linked_row_by_invoice.get(row.invoice_number)
+        )
+        for row in register_rows
+    }
+
     if apply:
         sheet_id = client.get_sheet_id(spreadsheet_id, sheet_name)
 
         for row_number, row in updated_rows:
-            match_row, _status = match_by_invoice[row.invoice_number]
             client.update_values(
                 spreadsheet_id, f"'{sheet_name}'!A{row_number}:G{row_number}",
-                [_row_to_e_values(row, sheet_id, match_row, reason_by_invoice[row.invoice_number])],
+                [_row_to_e_values(
+                    row, sheet_id, section_a_link_row_by_invoice[row.invoice_number],
+                    reason_by_invoice[row.invoice_number],
+                )],
             )
 
         if new_rows:
@@ -188,7 +212,8 @@ def sync_overhead_register(
             last_row = insert_at + len(new_rows) - 1
             values = [
                 _row_to_e_values(
-                    r, sheet_id, match_by_invoice[r.invoice_number][0], reason_by_invoice[r.invoice_number]
+                    r, sheet_id, section_a_link_row_by_invoice[r.invoice_number],
+                    reason_by_invoice[r.invoice_number],
                 )
                 for r in new_rows
             ]

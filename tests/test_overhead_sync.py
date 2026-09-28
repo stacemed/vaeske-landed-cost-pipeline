@@ -241,6 +241,33 @@ def test_sync_overhead_register_cross_links_invoice_number_and_section_a_cell():
     assert a_write == '=HYPERLINK("#gid=12345&range=A100", "Inspection-240112")'
 
 
+def test_sync_overhead_register_links_column_a_for_an_invoice_matched_in_a_previous_run():
+    # Same real bug as freight_sync's equivalent test: a match found by
+    # an EARLIER run is invisible to THIS run's own matching pass (the
+    # Section A cell is no longer blank), so without a fallback to
+    # Section A's current state, column A's link would never get
+    # written past the one run that first discovered the match.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-01-11", "Weimin Huang", "Inspection-240112", 218.0],
+        100: ["Inspection-240112", "01/11/2024", "01/11/2024", 218.0, "", ""],
+    })
+    rows = [
+        _row("Inspection-240112", invoice_date=date(2024, 1, 11), paid_date=date(2024, 1, 11),
+             amount=Decimal("218.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    e_write = [
+        values[0][0] for a1_range, values in client.updates
+        if a1_range == "'1 TRANSACTIONS'!A100:G100"
+    ][-1]
+    assert e_write == '=HYPERLINK("#gid=12345&range=D6", "Inspection-240112")'
+
+
 def test_sync_overhead_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
     # Same real risk as freight_sync's equivalent test: Section A row 6
     # is already linked (from an earlier run) to Inspection-240301,
