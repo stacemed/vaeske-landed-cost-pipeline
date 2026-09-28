@@ -496,6 +496,36 @@ def test_build_freight_register_rows_multi_region_invoices_share_base_payment():
     assert by_number["JG20240115E-US"].payment_link == "2024-01-16_FBSL_Frei-Bund_JG20240115E_pconf.pdf"
 
 
+def test_build_freight_register_rows_combined_pconf_names_multiple_unrelated_invoices():
+    # Real workflow (2026-09-28): the user named ONE pconf covering three
+    # entirely separate invoices (different base numbers, not a region
+    # suffix on one of them) paid in a single wire, with all three
+    # numbers hyphen-joined in its filename:
+    # "...JG20240614E-JG20240605E-JG20240531E_pconf.pdf". Every one of
+    # the three invoices must find it (not just whichever happens to be
+    # first), so they end up sharing its Paid date -- which is what then
+    # lets freight_sync.py's same-date combined-wire matching find them
+    # as a group without any separate cross-date logic.
+    invoice_531_text = "SUB TOTAL US$182.00\n\nSUB TOTAL US$140.00\n\nGRAND TOTAL US$322.00\n"
+    invoice_605_text = "SUB TOTAL US$1,144.36\n\nSUB TOTAL US$68.20\n\nGRAND TOTAL US$1,212.56\n"
+    invoice_614_text = "SUB TOTAL US$10,395.32\n\nSUB TOTAL US$669.96\n\nGRAND TOTAL US$11,065.28\n"
+    documents = [
+        (_doc("2024-05-31_FBSL_Frei-Bund_JG20240531E_INV-paid.pdf"), invoice_531_text),
+        (_doc("2024-06-05_FBSL_Frei-Bund_JG20240605E_INV-paid.pdf"), invoice_605_text),
+        (_doc("2024-06-14_FBSL_Frei-Bund_JG20240614E_INV-paid.pdf"), invoice_614_text),
+        (_doc("2024-06-21_FBSL_Frei-Bund_JG20240614E-JG20240605E-JG20240531E_pconf.pdf"), "Amount $12,599.84"),
+    ]
+
+    rows = build_freight_register_rows(documents)
+
+    assert len(rows) == 3  # the combined pconf's own group never becomes a 4th row
+    by_number = {r.invoice_number: r for r in rows}
+    combined_pconf_name = "2024-06-21_FBSL_Frei-Bund_JG20240614E-JG20240605E-JG20240531E_pconf.pdf"
+    for invoice_number in ("JG20240531E", "JG20240605E", "JG20240614E"):
+        assert by_number[invoice_number].paid_date == date(2024, 6, 21)
+        assert by_number[invoice_number].payment_link == combined_pconf_name
+
+
 def test_build_freight_register_rows_refund_invoice_negates_amounts():
     documents = [
         (_doc("2025-06-11_FBSL_Frei-Bund_JG20250612E-Refurn_INV-refund.pdf"), REFUND_INVOICE_TEXT),
