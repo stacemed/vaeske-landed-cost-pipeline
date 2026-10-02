@@ -360,7 +360,7 @@ def test_sync_overhead_register_does_not_reflag_an_invoice_matched_in_a_previous
              amount=Decimal("218.00")),
     ]
 
-    sync_overhead_register(
+    _new_rows, _updated_rows, backfills = sync_overhead_register(
         client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
         register_rows=rows, apply=True,
     )
@@ -368,6 +368,7 @@ def test_sync_overhead_register_does_not_reflag_an_invoice_matched_in_a_previous
     assert client._rows[100][6] == ""
     row_flags, _num_columns = client.row_flag_calls[-1]
     assert (100, False) in row_flags
+    assert backfills[0][2] == "already linked in Section A from a previous run -- nothing to do"
 
 
 def test_sync_overhead_register_writes_smart_chips_for_files_with_known_ids():

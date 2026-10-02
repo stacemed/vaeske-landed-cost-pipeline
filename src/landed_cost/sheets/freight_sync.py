@@ -261,6 +261,27 @@ def sync_freight_register(
         for row in register_rows
     }
 
+    # Real UX bug (2026-10-02): on every run AFTER an invoice's first
+    # successful match, match_section_a_row's own "no matching Section A
+    # transaction found (or it already has an Invoice #)" status is
+    # technically correct but reads as an alarming failure -- a 25-
+    # invoice run where all 25 were already matched by an earlier run
+    # printed "0 matched, 25 not matched", with nothing actually wrong.
+    # Relabeled here (not in match_section_a_row itself, which is also
+    # used standalone with no such context) using the exact same
+    # already-linked determination as review_reason, so a caller
+    # printing these doesn't need to re-derive it.
+    section_a_backfills = [
+        (
+            row,
+            match_row,
+            "already linked in Section A from a previous run -- nothing to do"
+            if match_row is None and not status.startswith("skipped") and not reason_by_invoice[row.invoice_number]
+            else status,
+        )
+        for row, match_row, status in section_a_backfills
+    ]
+
     # match_by_invoice only finds matches among Section A rows a fresh
     # match_section_a_row pass can still see -- once an invoice is
     # matched, its Section A cell is no longer blank, so a LATER run's

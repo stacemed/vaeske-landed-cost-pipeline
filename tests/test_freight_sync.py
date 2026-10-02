@@ -422,7 +422,7 @@ def test_sync_freight_register_does_not_reflag_an_invoice_matched_in_a_previous_
              freight_amount=Decimal("876.88"), bundling_amount=Decimal("113.16")),
     ]
 
-    sync_freight_register(
+    _new_rows, _updated_rows, backfills = sync_freight_register(
         client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
         register_rows=rows, apply=True,
     )
@@ -430,6 +430,12 @@ def test_sync_freight_register_does_not_reflag_an_invoice_matched_in_a_previous_
     assert client._rows[170][11] == ""
     row_flags, _num_columns = client.row_flag_calls[-1]
     assert (170, False) in row_flags
+    # Real UX bug (2026-10-02): match_section_a_row's own status text
+    # for this case ("no matching Section A transaction found (or it
+    # already has an Invoice #)") is accurate but reads as an alarming
+    # failure when printed -- a caller (the CLI script) needs a status
+    # that's unambiguous on its own.
+    assert backfills[0][2] == "already linked in Section A from a previous run -- nothing to do"
 
 
 def test_sync_freight_register_writes_smart_chips_for_files_with_known_ids():
