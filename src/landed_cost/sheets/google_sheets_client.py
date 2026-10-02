@@ -7,17 +7,30 @@ docs/DRIVE_INGESTION.md. Never imported by ``landed_cost.sheets.qbo``
 itself, so the parsing/planning logic and its tests never need these
 dependencies installed.
 
-Uses ``https://www.googleapis.com/auth/spreadsheets``, not the Drive
-scope -- they're separate APIs. A ``token.json`` generated before this
-scope existed won't have it; regenerate via ``scripts/get_token.py``
-(same one-time step, now requesting both scopes).
+Uses both the ``spreadsheets`` scope and the ``drive`` scope. Writing a
+Drive file smart chip (``write_file_chip_cells``) is a Sheets API call
+whose access token must ALSO carry Drive read rights for the chip's
+file reference to resolve -- confirmed by a real 403 (2026-10-02):
+"The request scopes are not sufficient for reading from Drive." A
+``token.json`` generated before chips existed may still have both
+scopes in its underlying grant (``scripts/get_token.py`` has requested
+both since the Sheets scope was first added), since this is a scoped-
+DOWN refresh problem, not a missing-grant one -- constructing
+credentials with only the ``spreadsheets`` scope here meant every
+refreshed access token for THIS client carried only that scope, no
+matter what the original token.json grant included. Regenerate via
+``scripts/get_token.py`` only if your token predates the Sheets scope
+entirely (see its own module docstring).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 
 class GoogleSheetsClient:
@@ -35,7 +48,7 @@ class GoogleSheetsClient:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
-        credentials = Credentials.from_authorized_user_file(path, scopes=[_SCOPE])
+        credentials = Credentials.from_authorized_user_file(path, scopes=_SCOPES)
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
         return cls(build("sheets", "v4", credentials=credentials))
