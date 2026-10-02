@@ -265,9 +265,11 @@ def main() -> int:
             print(f"      -> {row.flag_reason}")
 
     matched = [b for b in backfills if b[1] is not None]
-    unmatched = [b for b in backfills if b[1] is None]
+    already_linked = [b for b in backfills if b[1] is None and b[2].startswith("already linked")]
+    unmatched = [b for b in backfills if b[1] is None and not b[2].startswith("already linked")]
     print(f"\nSection A Invoice # backfill: {len(matched)} matched"
-          f"{' and written' if args.apply else ' (would write)'}, {len(unmatched)} not matched:")
+          f"{' and written' if args.apply else ' (would write)'}, "
+          f"{len(already_linked)} already linked from a previous run, {len(unmatched)} not matched:")
     for row, match_row, status in matched:
         note = " (combined wire)" if "combined wire" in status else ""
         print(f"    {row.invoice_number:<24} -> row {match_row}{note}")

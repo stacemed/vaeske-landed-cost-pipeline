@@ -173,6 +173,22 @@ def sync_overhead_register(
         for row in register_rows
     }
 
+    # Real UX bug (2026-10-02) -- see freight_sync.py's equivalent for
+    # the full story: relabels the technically-correct-but-alarming "no
+    # matching..." status for an invoice already linked by an earlier
+    # run, using the same already-linked determination review_reason
+    # already makes.
+    section_a_backfills = [
+        (
+            row,
+            match_row,
+            "already linked in Section A from a previous run -- nothing to do"
+            if match_row is None and not status.startswith("skipped") and not reason_by_invoice[row.invoice_number]
+            else status,
+        )
+        for row, match_row, status in section_a_backfills
+    ]
+
     # match_by_invoice only finds matches among Section A rows a fresh
     # match_section_a_row pass can still see -- once an invoice is
     # matched, its Section A cell is no longer blank, so a LATER run's
