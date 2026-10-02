@@ -134,5 +134,13 @@ class SheetsClient(Protocol):
         file's own current metadata, never from anything this call
         supplies -- there is no label to keep in sync, and a later
         rename in Drive shows up automatically.
+
+        A single ``batchUpdate`` call is rejected outright past a small
+        number of chip-bearing requests (confirmed in production,
+        2026-10-02: "The number of drive chip requests exceeds the
+        limit of 10") -- a real implementation must split ``cells``
+        across multiple calls to stay under that limit, transparently
+        to the caller, who just passes everything for the run in one
+        go.
         """
         ...

@@ -146,6 +146,17 @@ class GoogleSheetsClient:
             spreadsheetId=spreadsheet_id, body={"requests": requests}
         ).execute()
 
+    # Real limit hit in production (2026-10-02): a single batchUpdate
+    # call is rejected outright ("The number of drive chip requests
+    # exceeds the limit of 10") once too many of its requests carry a
+    # Drive chip -- a 25-invoice Freight run, up to 2 chip cells each,
+    # blows past this easily. Counted conservatively by total CHIPS
+    # across the batch (not requests), since a single cell can itself
+    # hold more than one chip (a combined multi-file link) -- that's
+    # the strictly safer interpretation of "10" either way the API
+    # actually counts it.
+    _MAX_CHIPS_PER_BATCH = 10
+
     def write_file_chip_cells(
         self,
         spreadsheet_id: str,
@@ -178,8 +189,8 @@ class GoogleSheetsClient:
                     index += 2  # length of ", "
             return {"userEnteredValue": {"stringValue": text}, "chipRuns": chip_runs}
 
-        requests = [
-            {
+        def _request(row_number: int, column_index: int, file_ids: list[str]) -> dict:
+            return {
                 "updateCells": {
                     "rows": [{"values": [_cell_data(file_ids)]}],
                     "start": {
@@ -190,11 +201,22 @@ class GoogleSheetsClient:
                     "fields": "userEnteredValue,chipRuns",
                 }
             }
-            for row_number, column_index, file_ids in cells
-        ]
-        self._service.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id, body={"requests": requests}
-        ).execute()
+
+        batch: list[dict] = []
+        chips_in_batch = 0
+        for row_number, column_index, file_ids in cells:
+            if batch and chips_in_batch + len(file_ids) > self._MAX_CHIPS_PER_BATCH:
+                self._service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id, body={"requests": batch}
+                ).execute()
+                batch = []
+                chips_in_batch = 0
+            batch.append(_request(row_number, column_index, file_ids))
+            chips_in_batch += len(file_ids)
+        if batch:
+            self._service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body={"requests": batch}
+            ).execute()
 
     def sort_range(
         self,
