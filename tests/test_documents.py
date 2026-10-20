@@ -119,6 +119,34 @@ def test_components_specific_doc_types_classify(suffix, expected):
     assert doc.doc_type_raw == suffix
 
 
+@pytest.mark.parametrize(
+    "suffix",
+    ["INV-bal-paid", "INV-paid-bal", "inv-bal2-paid"],
+)
+def test_real_balance_invoice_suffix_variants_classify(suffix):
+    # Real, already-filed Components filenames (2026-10-20) use these
+    # one-off phrasings instead of the documented "INV-bal[N]" --
+    # "INV-bal2-paid" already worked via the existing numbered-suffix
+    # rule (digit right after "inv-bal"); "INV-bal-paid"/"INV-paid-bal"
+    # needed an explicit alias since neither word order has a digit
+    # immediately after "inv-bal" or "inv-paid".
+    doc = SourceDocument.from_filename(f"2025-07-17_WHSM_Comp_INV-25Q4RPC26S-B02_{suffix}.pdf")
+    assert doc.doc_type is DocumentType.BALANCE_INVOICE
+    assert doc.doc_type_raw == suffix
+
+
+@pytest.mark.parametrize("suffix", ["pconf-1", "pconf-2"])
+def test_bare_numbered_pconf_classifies_as_balance_confirmation(suffix):
+    # Real, already-filed Components filenames (2026-10-20): a balance
+    # paid off across more than one wire gets pconf-1/pconf-2, with no
+    # "-bal" qualifier at all -- the digit isn't immediately after
+    # "pconf" (there's a hyphen), so the general numbered-suffix rule
+    # doesn't fire; needed its own pattern.
+    doc = SourceDocument.from_filename(f"2024-08-12_WHSM_Comp_INV-JUN24USQ4CRP_{suffix}.pdf")
+    assert doc.doc_type is DocumentType.PAYMENT_CONFIRMATION_BALANCE
+    assert doc.doc_type_raw == suffix
+
+
 def test_inv_full_is_distinct_from_plain_inv_paid():
     # "INV-full" must not be swallowed by the "INV-paid" prefix -- they're
     # different DocumentType values with different meaning for Components

@@ -1,12 +1,25 @@
 import pytest
 
 from landed_cost.sheets.section_headers import (
+    SECTION_C_TITLE_PATTERN,
     SECTION_E_TITLE_PATTERN,
     find_section_data_start_row,
     verify_column_header,
 )
 
 from sheets_fakes import FakeSheetsClient
+
+
+def test_find_section_data_start_row_locates_section_c_by_its_own_title():
+    client = FakeSheetsClient({
+        166: ["C · COMPONENT INVOICE REGISTER"],
+        167: ["Invoice #"],
+        168: ["INV-25Q1SLV26QTINNERBOX-01"],
+    })
+
+    row = find_section_data_start_row(client, "sheet1", "1 TRANSACTIONS", SECTION_C_TITLE_PATTERN)
+
+    assert row == 168
 
 
 def test_find_section_data_start_row_locates_section_e_by_its_own_title():
