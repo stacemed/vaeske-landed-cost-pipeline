@@ -29,12 +29,15 @@ documents (2026-10-20):
   own balance invoice) -- the deposit's own filename invoice number
   doesn't exactly match either register row's invoice number (neither
   the "-B1-B2" combined form nor a single "-B1" matches the register's
-  zero-padded "-B01"). Per the project owner's own choice, this module
-  never tries to auto-split or auto-normalize that -- it only matches a
-  filed document to an EXISTING register row by an exact (case-
-  insensitive) invoice-number match; a document whose invoice number
-  doesn't exactly match any existing row is reported as unmatched, never
-  guessed at or silently dropped.
+  zero-padded "-B01"). This module never tries to auto-split or auto-
+  normalize that: a filed document whose invoice number merely
+  RESEMBLES (see ``_resembles_an_existing_invoice_number``) an existing
+  register row, without exactly matching it, is reported as unmatched
+  for a human to resolve, never guessed at or silently dropped. A
+  genuinely new order -- one that doesn't resemble anything already in
+  the register at all -- IS safely auto-inserted as a brand-new row (the
+  project owner's own choice, 2026-10-20, once the split/drift ambiguity
+  above is ruled out this way): see ``build_components_register_rows``.
 - "Total Order $" is extracted from whichever filed document states it
   most reliably (tried in order: deposit invoice, balance invoice, full
   invoice), using known label phrasings per vendor -- "Sub Total" and
@@ -164,10 +167,12 @@ def balance_installment_number(doc_type_raw: str) -> int:
 
 class ComponentRegisterRow(BaseModel):
     """One row of 1 TRANSACTIONS Section C, rebuilt from every document
-    CURRENTLY filed against an invoice number that already has a row in
-    the live sheet -- see this module's docstring for why a brand-new
-    invoice number, or a document that doesn't exactly match one, is
-    never auto-inserted.
+    CURRENTLY filed against an invoice number -- either one that already
+    has a row in the live sheet (a caller updates it in place), or a
+    genuinely new one (a caller inserts a new row) -- see this module's
+    docstring for why a document that merely RESEMBLES an existing
+    invoice number without exactly matching it is never guessed into
+    either, and comes back as unmatched instead.
 
     ``total_order_amount`` is the freshly extracted figure (or None if
     extraction failed, in which case a caller must leave the sheet's
@@ -207,17 +212,44 @@ def _filenames_and_ids(
     return ", ".join(names), [file_ids[n] for n in names if n in file_ids]
 
 
+def _resembles_an_existing_invoice_number(lowered: str, existing_lower: dict[str, str]) -> bool:
+    """True when ``lowered`` (already-lowercased, not an exact match to
+    anything in ``existing_lower``) looks like a drifted or split variant
+    of an invoice number ALREADY in the register, rather than a genuinely
+    new order -- a prefix relationship either direction catches both real
+    confirmed cases (2026-10-20): a shared deposit's own invoice number
+    ("INV-25Q4RPC26S") being a prefix of two existing split-order rows
+    ("INV-25Q4RPC26S-B01"/"-B02"), and a differently-suffixed deposit for
+    an order that already has a register row under its balance invoice's
+    own number ("INV-2505RK-DPS" vs. existing "INV-2505RK"). Such a
+    document is never auto-inserted as its own new row -- see this
+    module's docstring.
+    """
+    return any(lowered.startswith(existing) or existing.startswith(lowered) for existing in existing_lower)
+
+
 def build_components_register_rows(
     documents: list[tuple[SourceDocument, str]],
     existing_invoice_numbers: set[str],
     file_ids: dict[str, str] | None = None,
 ) -> tuple[list[ComponentRegisterRow], list[SourceDocument]]:
-    """Group filed Components documents by invoice number, but ONLY for
-    an ``invoice_number`` (case-insensitive exact match) already present
-    in ``existing_invoice_numbers`` -- the live sheet's current Section C
-    Invoice # column. Everything else comes back in the second return
-    value (``unmatched``) for a caller to report, never silently
-    dropped and never auto-inserted as a new row.
+    """Group filed Components documents by invoice number.
+
+    An ``invoice_number`` (case-insensitive) already present in
+    ``existing_invoice_numbers`` -- the live sheet's current Section C
+    Invoice # column -- groups under its existing row, for a caller to
+    update in place. A genuinely new invoice number -- one that doesn't
+    exactly match AND doesn't merely resemble (see
+    ``_resembles_an_existing_invoice_number``) anything already in the
+    register -- groups under itself, for a caller to insert as a new
+    row: per the project owner's own choice, auto-inserting is safe once
+    the known split/drift ambiguity around an existing order is ruled
+    out this way. An invoice number that resembles but doesn't exactly
+    match an existing one is never guessed at either way -- it comes
+    back in the second return value (``unmatched``) for a caller to
+    report instead, since the known real cases are always better
+    resolved by a human (e.g. add the missing register row, or fix a
+    drifted filename) than by a silent auto-insert or auto-merge.
 
     ``documents`` is every filed file's ``(SourceDocument, extracted PDF
     text)`` pair from BOTH real Components folders, already combined by
@@ -228,12 +260,20 @@ def build_components_register_rows(
     existing_lower = {inv.lower(): inv for inv in existing_invoice_numbers}
 
     groups: dict[str, list[tuple[SourceDocument, str]]] = {}
+    canonical_by_lower: dict[str, str] = dict(existing_lower)
     unmatched: list[SourceDocument] = []
     for doc, text in documents:
-        canonical = existing_lower.get(doc.invoice_number.lower())
+        lowered = doc.invoice_number.lower()
+        canonical = canonical_by_lower.get(lowered)
         if canonical is None:
-            unmatched.append(doc)
-            continue
+            if _resembles_an_existing_invoice_number(lowered, existing_lower):
+                unmatched.append(doc)
+                continue
+            # Genuinely new -- group under this document's own invoice
+            # number (first-seen casing), consistently across every other
+            # document for the same new order in this same run.
+            canonical = doc.invoice_number
+            canonical_by_lower[lowered] = canonical
         groups.setdefault(canonical, []).append((doc, text))
 
     rows: list[ComponentRegisterRow] = []
@@ -294,9 +334,10 @@ def build_components_register_rows(
             if total_order_amount is not None:
                 break
         if total_order_amount is None and (deposit_invoice_items or balance_invoice_items):
+            is_new_row = invoice_number.lower() not in existing_lower
             issues.append(
                 "could not extract Total Order $ from any filed invoice for this order "
-                "-- existing sheet value left as-is, fill in/check by hand"
+                + ("-- fill in by hand" if is_new_row else "-- existing sheet value left as-is, fill in/check by hand")
             )
 
         if total_order_amount is not None:
