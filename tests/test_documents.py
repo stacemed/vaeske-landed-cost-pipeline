@@ -147,6 +147,41 @@ def test_bare_numbered_pconf_classifies_as_balance_confirmation(suffix):
     assert doc.doc_type_raw == suffix
 
 
+@pytest.mark.parametrize(
+    "suffix,expected",
+    [
+        ("INV-pconf-dep", DocumentType.PAYMENT_CONFIRMATION_DEPOSIT),
+        ("INV-pconf-bal1", DocumentType.PAYMENT_CONFIRMATION_BALANCE),
+        ("INV-pconf-bal2", DocumentType.PAYMENT_CONFIRMATION_BALANCE),
+    ],
+)
+def test_pconf_token_with_accidental_inv_prefix_classifies(suffix, expected):
+    # Real, already-filed Components filenames (2026-10-20): a payment
+    # confirmation's own token sometimes carries an accidental "INV-"
+    # prefix meant for an invoice token instead -- "INV-pconf-dep",
+    # "INV-pconf-bal1", "INV-pconf-bal2" (all three filed for the same
+    # order, INV-25Q1SLV26QTINNERBOX-01). None of these start with a
+    # recognized "pconf..." prefix as written, so they fell through to
+    # OTHER before the "INV-" was stripped.
+    doc = SourceDocument.from_filename(
+        f"2025-03-06_WHSM_comp_INV-25Q1SLV26QTINNERBOX-01_{suffix}.pdf"
+    )
+    assert doc.doc_type is expected
+    assert doc.doc_type_raw == suffix
+
+
+def test_inv_paid_full_classifies_as_paid_invoice():
+    # Real, already-filed Components filename (2026-10-20): a single
+    # undivided order's one-shot invoice filed as "INV-paid-full" rather
+    # than the plain "INV-paid" this module's docstring originally
+    # assumed -- "INV-paid-full" falls through the ordinary "inv-paid"
+    # prefix rule since the character right after "inv-paid" is "-", not
+    # a digit.
+    doc = SourceDocument.from_filename("2025-09-24_WHSM_Comp_INV-26Q1PKG_INV-paid-full.pdf")
+    assert doc.doc_type is DocumentType.PAID_INVOICE
+    assert doc.doc_type_raw == "INV-paid-full"
+
+
 def test_inv_full_is_distinct_from_plain_inv_paid():
     # "INV-full" must not be swallowed by the "INV-paid" prefix -- they're
     # different DocumentType values with different meaning for Components

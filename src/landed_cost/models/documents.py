@@ -75,11 +75,25 @@ _BALANCE_INVOICE_ALIASES = ("inv-bal-paid", "inv-paid-bal")
 # immediately after "pconf" (there's a hyphen in between).
 _BARE_NUMBERED_PCONF_RE = re.compile(r"^pconf-\d+$")
 
+# Confirmed real (2026-10-20): a single undivided order's one-shot
+# invoice is sometimes filed as "INV-paid-full" rather than the plain
+# "INV-paid" this module's own docstring originally assumed.
+_PAID_INVOICE_ALIASES = ("inv-paid-full",)
+
 
 def _classify_doc_type(token: str) -> DocumentType:
     lowered = token.lower()
+    if lowered.startswith("inv-pconf"):
+        # Also confirmed real (2026-10-20): a payment confirmation's own
+        # token sometimes carries an accidental "INV-" prefix too --
+        # "INV-pconf-dep", "INV-pconf-bal1", "INV-pconf-bal2" -- meant for
+        # an invoice token, not a payment confirmation one. Strip it and
+        # classify what's left as the pconf type it actually is.
+        lowered = lowered[len("inv-") :]
     if lowered in _BALANCE_INVOICE_ALIASES:
         return DocumentType.BALANCE_INVOICE
+    if lowered in _PAID_INVOICE_ALIASES:
+        return DocumentType.PAID_INVOICE
     if _BARE_NUMBERED_PCONF_RE.match(lowered):
         return DocumentType.PAYMENT_CONFIRMATION_BALANCE
     for prefix, doc_type in _DOC_TYPE_PREFIXES:
