@@ -14,10 +14,13 @@ documents (2026-10-20):
   simple paid-or-not. A single, undivided order (no split at all) still
   uses the Deposit invoice/Deposit payment columns -- confirmed against
   a real register row (INV-26Q1PKG) whose only filed document is an
-  "INV-paid" invoice sitting in the Deposit invoice slot.
+  "INV-paid-full" invoice sitting in the Deposit invoice slot.
 - Real filenames drift from the documented "INV-bal[N]"/"pconf-bal[N]"
   convention in several ways -- "INV-bal-paid", "INV-paid-bal", bare
-  numbered "pconf-1"/"pconf-2" with no "-bal" qualifier at all. See
+  numbered "pconf-1"/"pconf-2" with no "-bal" qualifier at all,
+  "INV-paid-full" for a one-shot invoice, and a payment confirmation's
+  own token carrying an accidental "INV-" prefix meant for an invoice
+  token instead ("INV-pconf-dep", "INV-pconf-bal1"). See
   ``models.documents``'s ``_classify_doc_type`` for where these are now
   recognized.
 - A single deposit document can fund TWO separate final orders that
