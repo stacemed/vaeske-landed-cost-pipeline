@@ -52,6 +52,13 @@ def _correct_orientation(image):
     return image.rotate(-rotate, expand=True) if rotate else image
 
 
+def _ocr_image(image) -> str:
+    import pytesseract
+
+    image = _correct_orientation(image)
+    return pytesseract.image_to_string(image)
+
+
 def extract_text_via_ocr(pdf_bytes: bytes, dpi: int = 300) -> str:
     """Render every page to an image and OCR it, returning the joined text.
 
@@ -65,7 +72,6 @@ def extract_text_via_ocr(pdf_bytes: bytes, dpi: int = 300) -> str:
     import io
 
     import pymupdf
-    import pytesseract
     from PIL import Image
 
     document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
@@ -75,6 +81,24 @@ def extract_text_via_ocr(pdf_bytes: bytes, dpi: int = 300) -> str:
     for page in document:
         pixmap = page.get_pixmap(matrix=matrix)
         image = Image.open(io.BytesIO(pixmap.tobytes("png")))
-        image = _correct_orientation(image)
-        texts.append(pytesseract.image_to_string(image))
+        texts.append(_ocr_image(image))
     return "\n".join(texts)
+
+
+def extract_text_from_image_bytes(image_bytes: bytes) -> str:
+    """OCR a raw image file directly -- a scan or screenshot filed as
+    ``.jpg``/``.png`` instead of being converted to PDF first. Real,
+    already-filed example (2026-10-20): a Components payment
+    confirmation filed as a ``.jpg``, which crashed ``pypdf`` outright
+    ("Stream has ended unexpectedly") when fed through the PDF-only
+    extraction path -- it isn't a PDF with no text layer, it isn't a PDF
+    at all. Skips ``extract_text_via_ocr``'s PyMuPDF page-rendering step
+    entirely (there's no PDF page to render) and opens the image bytes
+    directly instead.
+    """
+    import io
+
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    return _ocr_image(image)
