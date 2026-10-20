@@ -132,11 +132,11 @@ def test_build_components_register_rows_only_matches_an_existing_invoice_number(
     assert row.flagged is False
 
 
-def test_build_components_register_rows_reports_a_document_with_no_matching_invoice_number():
-    # Real design choice: an invoice number that doesn\'t EXACTLY match
-    # an existing register row (a brand-new order, a typo, or the
-    # zero-padding/suffix drift confirmed on real shared-deposit orders)
-    # is reported as unmatched, never guessed at or auto-inserted.
+def test_build_components_register_rows_treats_a_genuinely_new_invoice_number_as_a_new_row():
+    # Real design choice (2026-10-20): once a document's invoice number
+    # neither exactly matches NOR resembles anything already in the
+    # register, it's safe to auto-insert as a brand-new row -- same as
+    # Freight/Overhead.
     documents = [
         (_doc("2024-10-12_WHSM_Comp_INV-24Q4SLV_INV-dep.pdf"), WHSM_DEPOSIT_INVOICE_TEXT),
     ]
@@ -145,9 +145,29 @@ def test_build_components_register_rows_reports_a_document_with_no_matching_invo
         documents, existing_invoice_numbers={"INV-SOMETHING-ELSE"},
     )
 
+    assert unmatched == []
+    assert len(rows) == 1
+    assert rows[0].invoice_number == "INV-24Q4SLV"
+
+
+def test_build_components_register_rows_reports_an_invoice_number_that_only_resembles_an_existing_one():
+    # Real confirmed case (2026-10-20): a single deposit document funds
+    # TWO separate final orders that already have their own register
+    # rows ("INV-25Q4RPC26S-B01"/"-B02") -- the deposit's own invoice
+    # number ("INV-25Q4RPC26S") is a prefix of both, so it's never
+    # guessed into either an update or a brand-new row; it's reported as
+    # unmatched for a human to resolve.
+    documents = [
+        (_doc("2025-06-05_WHSM_Comp_INV-25Q4RPC26S_INV-dep.pdf"), WHSM_DEPOSIT_INVOICE_TEXT),
+    ]
+
+    rows, unmatched = build_components_register_rows(
+        documents, existing_invoice_numbers={"INV-25Q4RPC26S-B01", "INV-25Q4RPC26S-B02"},
+    )
+
     assert rows == []
     assert len(unmatched) == 1
-    assert unmatched[0].invoice_number == "INV-24Q4SLV"
+    assert unmatched[0].invoice_number == "INV-25Q4RPC26S"
 
 
 def test_build_components_register_rows_matches_case_insensitively():
@@ -178,7 +198,28 @@ def test_build_components_register_rows_flags_extraction_failure_but_does_not_bl
     assert row.total_order_amount is None
     assert row.flagged is True
     assert "could not extract Total Order $" in row.flag_reason
+    assert "existing sheet value left as-is" in row.flag_reason
     assert row.balance_invoice_link == "2025-07-10_WHSM_Comp_INV-25Q4RPC26S-B01_INV-bal1.pdf"
+
+
+def test_build_components_register_rows_flags_extraction_failure_differently_for_a_new_row():
+    # A brand-new row has no existing sheet value to "leave as-is" --
+    # the flag message must say so instead of implying one exists.
+    documents = [
+        (_doc("2025-07-10_WHSM_Comp_INV-25Q4RPC26S-B01_INV-bal1.pdf"), WHSM_BALANCE_INVOICE_JUMBLED_2025_TEXT),
+    ]
+
+    rows, _unmatched = build_components_register_rows(
+        documents, existing_invoice_numbers=set(),
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.total_order_amount is None
+    assert row.flagged is True
+    assert "could not extract Total Order $" in row.flag_reason
+    assert "existing sheet value left as-is" not in row.flag_reason
+    assert "fill in by hand" in row.flag_reason
 
 
 def test_build_components_register_rows_sorts_numbered_balance_payments_into_their_own_slots():

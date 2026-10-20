@@ -1,19 +1,18 @@
 """Wires components_register.py's pure grouping/extraction logic to a
-SheetsClient: reads what's already in 1 TRANSACTIONS Section C, updates
-an EXISTING invoice number's row in place, and backfills Section A's
-Invoice # column once a payment is matched.
+SheetsClient: reads what's already in 1 TRANSACTIONS Section C, upserts
+register rows (updates an existing invoice number's row in place, inserts
+genuinely new ones), and backfills Section A's Invoice # column once a
+payment is matched.
 
-Unlike Freight/Overhead, this never inserts a new row -- per the real
-messiness confirmed in components_register.py's own docstring (invoice
-numbers that don't exactly match the filename, shared deposits funding
-more than one final order), the project owner's own choice was to only
-ever verify/supplement a register row a human already created, never to
-guess a new one into existence. A filed document whose invoice number
-doesn't exactly match an existing row is the caller's (the CLI script's)
-responsibility to report -- this module only ever sees documents already
-grouped under a matched existing invoice number (see
-``components_register.build_components_register_rows``'s own
-``existing_invoice_numbers`` parameter).
+Unlike the original v1 scope, this now DOES insert a new row -- but only
+for an invoice number ``build_components_register_rows`` has already
+determined is genuinely new (no existing row resembles it at all; see
+that function's and ``_resembles_an_existing_invoice_number``'s
+docstrings for the real split/drift ambiguity this rules out first). A
+filed document whose invoice number merely resembles, without exactly
+matching, an existing row never reaches this module at all -- it's the
+caller's (the CLI script's) responsibility to report that one as
+unmatched, same as before.
 
 Section C lives in the same "1 TRANSACTIONS" tab as Section A -- just a
 different row range -- so both are addressed with one sheet_name and two
@@ -64,13 +63,15 @@ def read_existing_c_register(
     sheet_name: str,
     start_row: int,
     max_rows: int = 1000,
-) -> dict[str, tuple[int, Decimal | None, Decimal | None]]:
+) -> tuple[dict[str, tuple[int, Decimal | None, Decimal | None]], int]:
     """Map each already-registered invoice number to its row number and
     its CURRENT "Total Order $"/"Invoice Adjustments" values -- needed
     so a caller can preserve Invoice Adjustments untouched, and Total
     Order $ when this run's own extraction fails, rather than blanking
-    a real number. Stops at the first row with an empty Invoice #
-    (column A), same boundary rule as Section D/E.
+    a real number. Also returns the first EMPTY row right after the
+    last existing one -- where a brand-new row gets inserted. Stops at
+    the first row with an empty Invoice # (column A), same boundary
+    rule as Section D/E.
     """
     end_row = start_row + max_rows - 1
     values = client.get_values(spreadsheet_id, f"'{sheet_name}'!A{start_row}:E{end_row}")
@@ -85,7 +86,7 @@ def read_existing_c_register(
         invoice_adjustments = _parse_cell_amount(row[4]) if len(row) > 4 else None
         existing[invoice_number] = (row_number, total_order_amount, invoice_adjustments)
         row_number += 1
-    return existing
+    return existing, row_number
 
 
 def _row_to_c_values(
@@ -129,32 +130,48 @@ def sync_components_register(
     register_rows: list[ComponentRegisterRow],
     apply: bool,
 ) -> tuple[
+    list[ComponentRegisterRow],
     list[tuple[int, ComponentRegisterRow]],
     list[tuple[ComponentRegisterRow, int | None, str]],
 ]:
-    """Verify/update EXISTING Section C rows from freshly-built register
-    rows, then backfill Section A's Invoice # for every row with a known
-    Total Order $ (extracted or preserved) and Balance paid date.
+    """Upsert Section C from freshly-built register rows (updates an
+    existing invoice number's row in place, inserts a genuinely new one),
+    then backfill Section A's Invoice # for every row with a known Total
+    Order $ (extracted or preserved) and Balance paid date.
 
-    ``register_rows`` must only ever contain rows whose invoice number
-    already has a row in the live sheet -- see
-    ``components_register.build_components_register_rows``'s own
-    ``existing_invoice_numbers`` parameter, which is what makes that
-    guarantee true. A row whose invoice number isn't found here anyway
-    (shouldn't happen given that contract, but checked rather than
-    assumed) is skipped with no write and no Section A backfill attempt,
-    not guessed into a new row.
+    ``register_rows`` is split into ``new_rows``/``updated_rows`` purely
+    by whether its invoice number already has a row in the live sheet --
+    the harder question of whether an invoice number is safe to treat as
+    "genuinely new" at all (rather than an ambiguous near-miss of an
+    existing row, never auto-inserted) is already resolved by the
+    caller's own ``components_register.build_components_register_rows``
+    call; see that function's docstring.
 
-    Returns ``(updated_rows, section_a_backfills)`` -- ``updated_rows``
-    is ``(row_number, register_row)`` pairs and ``section_a_backfills``
-    is ``(register_row, matched_row_or_None, status)`` for every row
-    found in the existing register, whether or not ``apply`` actually
-    ran (so a dry run can preview exactly what would happen).
+    Returns ``(new_rows, updated_rows, section_a_backfills)`` --
+    ``updated_rows`` is ``(row_number, register_row)`` pairs and
+    ``section_a_backfills`` is ``(register_row, matched_row_or_None,
+    status)`` for every row in ``register_rows``, whether or not
+    ``apply`` actually ran (so a dry run can preview exactly what would
+    happen).
     """
-    existing = read_existing_c_register(client, spreadsheet_id, sheet_name, section_c_start_row)
+    existing, first_empty_row = read_existing_c_register(
+        client, spreadsheet_id, sheet_name, section_c_start_row
+    )
 
-    found_rows = [row for row in register_rows if row.invoice_number in existing]
-    updated_rows = [(existing[row.invoice_number][0], row) for row in found_rows]
+    new_rows: list[ComponentRegisterRow] = []
+    updated_rows: list[tuple[int, ComponentRegisterRow]] = []
+    for row in register_rows:
+        if row.invoice_number in existing:
+            updated_rows.append((existing[row.invoice_number][0], row))
+        else:
+            new_rows.append(row)
+
+    # Unlike freight_sync.py/overhead_sync.py's equivalent (which backs
+    # up one row and relies on an opt-in --sort pass to fix the
+    # resulting visual reorder), Components has no --sort -- so this
+    # inserts directly at the first empty row, after every existing row,
+    # with nothing already in the sheet shifting out of place.
+    insert_at = first_empty_row
 
     # Read (never write) Section A even on a dry run, so the preview
     # shows exactly what --apply would do -- a caller shouldn't have to
@@ -163,12 +180,17 @@ def sync_components_register(
 
     section_a_backfills: list[tuple[ComponentRegisterRow, int | None, str]] = []
     total_order_amount_by_invoice: dict[str, Decimal | None] = {}
-    for row in found_rows:
-        _row_number, existing_total, existing_adjustments = existing[row.invoice_number]
-        adjustments = existing_adjustments if existing_adjustments is not None else Decimal("0")
-        total_order_amount = (
-            row.total_order_amount + adjustments if row.total_order_amount is not None else existing_total
-        )
+    for row in register_rows:
+        if row.invoice_number in existing:
+            _row_number, existing_total, existing_adjustments = existing[row.invoice_number]
+            adjustments = existing_adjustments if existing_adjustments is not None else Decimal("0")
+            total_order_amount = (
+                row.total_order_amount + adjustments if row.total_order_amount is not None else existing_total
+            )
+        else:
+            # Brand-new row -- no existing "Invoice Adjustments" to add
+            # back in yet (nothing filed/curated for it until now).
+            total_order_amount = row.total_order_amount
         total_order_amount_by_invoice[row.invoice_number] = total_order_amount
 
         if total_order_amount is None or row.balance_paid_date is None:
@@ -185,7 +207,7 @@ def sync_components_register(
             row.flagged, row.flag_reason, match_by_invoice[row.invoice_number][1],
             row.invoice_number, section_a_rows,
         )
-        for row in found_rows
+        for row in register_rows
     }
 
     # Relabels the technically-correct-but-alarming "no matching..."
@@ -217,7 +239,7 @@ def sync_components_register(
             if match_by_invoice[row.invoice_number][0] is not None
             else already_linked_row_by_invoice.get(row.invoice_number)
         )
-        for row in found_rows
+        for row in register_rows
     }
 
     if apply:
@@ -234,8 +256,32 @@ def sync_components_register(
                 )],
             )
 
+        if new_rows:
+            client.insert_rows(spreadsheet_id, sheet_id, insert_at, len(new_rows))
+            last_row = insert_at + len(new_rows) - 1
+            values = [
+                _row_to_c_values(
+                    row, sheet_id, section_a_link_row_by_invoice[row.invoice_number],
+                    total_order_amount_by_invoice[row.invoice_number],
+                    None,  # brand new -- no existing "Invoice Adjustments" to carry forward
+                    reason_by_invoice[row.invoice_number],
+                )
+                for row in new_rows
+            ]
+            client.update_values(spreadsheet_id, f"'{sheet_name}'!A{insert_at}:M{last_row}", values)
+
         client.update_values(
             spreadsheet_id, f"'{sheet_name}'!M{section_c_start_row - 1}", [["Flag Reason"]]
+        )
+
+        # Re-read Section C's CURRENT row positions -- a brand-new row's
+        # insertion point (and every existing row at or below it) may
+        # have shifted; see freight_sync.sync_freight_register's
+        # docstring for why every Section A -> register link (not just
+        # new matches) is recomputed and rewritten from a fresh read on
+        # every run, same reasoning applies here.
+        final_register_map, _ = read_existing_c_register(
+            client, spreadsheet_id, sheet_name, section_c_start_row
         )
 
         # Category-filtered -- see freight_sync.py's equivalent comment
@@ -253,7 +299,7 @@ def sync_components_register(
                 linked_match_rows[match_row] = row.invoice_number
 
         for match_row, invoice_number in linked_match_rows.items():
-            target_row = existing.get(invoice_number, (None, None, None))[0]
+            target_row = final_register_map.get(invoice_number, (None, None, None))[0]
             value = (
                 f'=HYPERLINK("#gid={sheet_id}&range=A{target_row}", "{invoice_number}")'
                 if target_row is not None else invoice_number
@@ -261,8 +307,9 @@ def sync_components_register(
             client.update_values(spreadsheet_id, f"'{sheet_name}'!D{match_row}", [[value]])
 
         row_flags = [
-            (existing[row.invoice_number][0], bool(reason_by_invoice[row.invoice_number]))
-            for row in found_rows
+            (final_register_map[row.invoice_number][0], bool(reason_by_invoice[row.invoice_number]))
+            for row in register_rows
+            if row.invoice_number in final_register_map
         ]
         client.format_row_flags(spreadsheet_id, sheet_id, row_flags, num_columns=_NUM_COLUMNS)
 
@@ -273,8 +320,9 @@ def sync_components_register(
         # after the bulk row write, and why a link with no known file
         # id is simply skipped rather than blanked.
         chip_cells = [
-            (existing[row.invoice_number][0], column_index, file_ids)
-            for row in found_rows
+            (final_register_map[row.invoice_number][0], column_index, file_ids)
+            for row in register_rows
+            if row.invoice_number in final_register_map
             for column_index, file_ids in (
                 (5, row.deposit_invoice_file_ids),
                 (6, row.deposit_payment_file_ids),
@@ -288,4 +336,4 @@ def sync_components_register(
         ]
         client.write_file_chip_cells(spreadsheet_id, sheet_id, chip_cells)
 
-    return updated_rows, section_a_backfills
+    return new_rows, updated_rows, section_a_backfills

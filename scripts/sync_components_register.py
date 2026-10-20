@@ -9,17 +9,19 @@ and 2025 orders are filed in two separate folders (the second one, a
 different owner's "...- Paid in 2025" folder, holds everything the
 register's 2025 rows actually reference). Pass both folder IDs.
 
-Unlike Freight/Overhead, this NEVER inserts a new row -- Components
-invoice numbers follow no consistent format across vendors (see
-components_register.py's own docstring for the real messiness: drifted
-filename suffixes, a single deposit funding two split sub-orders whose
-register invoice numbers don't exactly match any filename), so per the
-project owner's own choice, a document is only ever matched to an
-EXISTING register row by an exact (case-insensitive) invoice-number
-match. A filed document that doesn't exactly match any existing row is
-reported below as unmatched -- never silently dropped, never guessed
-into a new row. Add that order's row to the sheet by hand once; every
-later run then keeps it updated automatically.
+A document matches an EXISTING register row by an exact (case-
+insensitive) invoice-number match, and that row is updated in place. A
+genuinely new invoice number -- one that doesn't exactly match AND
+doesn't merely resemble anything already in the register (see
+components_register.py's ``_resembles_an_existing_invoice_number`` for
+what "resembles" catches: the real messiness of a single deposit
+funding two split sub-orders, drifted filename suffixes, zero-padding
+drift) -- gets a brand-new row auto-inserted, same as Freight/Overhead.
+An invoice number that resembles but doesn't exactly match an existing
+row is never guessed into either an update or a new row -- it's
+reported below as unmatched, for a human to resolve by hand (fix a
+drifted filename, or realize two filed documents belong on the same
+existing row).
 
 "Total Order $" is extracted from whichever filed invoice states it
 most reliably (see components_register.py for the known label patterns
@@ -185,14 +187,14 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    existing = read_existing_c_register(
+    existing, _first_empty_row = read_existing_c_register(
         sheets_client, args.spreadsheet_id, args.sheet_name, section_c_start_row
     )
     register_rows, unmatched = build_components_register_rows(
         documents, existing_invoice_numbers=set(existing.keys()), file_ids=file_ids,
     )
 
-    updated_rows, backfills = sync_components_register(
+    new_rows, updated_rows, backfills = sync_components_register(
         sheets_client,
         args.spreadsheet_id,
         args.sheet_name,
@@ -202,16 +204,26 @@ def main() -> int:
         apply=args.apply,
     )
 
-    print(f"\n{len(register_rows)} existing invoice(s) matched from {len(documents)} filed document(s).")
+    print(f"\n{len(register_rows)} invoice(s) built from {len(documents)} filed document(s) "
+          f"({len(updated_rows)} existing, {len(new_rows)} new).")
 
     if unmatched:
-        print(f"\n{len(unmatched)} filed document(s) didn't exactly match any existing Section C "
-              f"Invoice # -- add the row by hand, then re-run:")
+        print(f"\n{len(unmatched)} filed document(s) resemble an existing Section C Invoice # "
+              f"without exactly matching it -- never auto-inserted or auto-merged, resolve by hand "
+              f"then re-run:")
         for doc in sorted(unmatched, key=lambda d: d.raw_filename):
             print(f"  ! {doc.raw_filename} (invoice number read as {doc.invoice_number!r})")
 
-    print(f"\n{len(updated_rows)} existing row(s){' to update' if not args.apply else ' updated'}:")
+    print(f"\n{len(new_rows)} new row(s){' to insert' if not args.apply else ' inserted'}:")
     flagged_count = 0
+    for row in new_rows:
+        marker = "  ! " if row.flagged else "    "
+        print(f"{marker}{row.invoice_number:<28} | {row.balance_paid_date} | {row.total_order_amount}")
+        if row.flagged:
+            flagged_count += 1
+            print(f"      -> {row.flag_reason}")
+
+    print(f"\n{len(updated_rows)} existing row(s){' to update' if not args.apply else ' updated'}:")
     for row_number, row in updated_rows:
         marker = "  ! " if row.flagged else "    "
         print(f"{marker}row {row_number}: {row.invoice_number:<28} | {row.balance_paid_date} | "
@@ -236,7 +248,7 @@ def main() -> int:
         print(f"\n{flagged_count} row(s) are flagged (extraction problem, refund document, or an "
               f"unclassified filed document) -- review and fill in by hand.")
 
-    if not args.apply and updated_rows:
+    if not args.apply and (new_rows or updated_rows):
         print("\nDry run only -- pass --apply to actually write these changes.")
 
     return 1 if (flagged_count or unmatched) else 0

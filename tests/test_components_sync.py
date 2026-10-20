@@ -35,32 +35,33 @@ def test_read_existing_c_register_parses_invoice_number_row_total_and_adjustment
         170: ["", "", "", "", "", "", "", "", "", "", "", ""],
     })
 
-    existing = read_existing_c_register(client, "sheet1", "1 TRANSACTIONS", start_row=169)
+    existing, first_empty_row = read_existing_c_register(client, "sheet1", "1 TRANSACTIONS", start_row=169)
 
     assert existing == {"INV-25Q1SLV26QTINNERBOX-01": (169, Decimal("15182.0"), Decimal("0.0"))}
+    assert first_empty_row == 170
 
 
-def test_sync_components_register_never_inserts_an_unmatched_invoice_number():
-    # Defensive check: a row whose invoice number isn't in the existing
-    # sheet at all must never be written -- components_register.py's own
-    # existing_invoice_numbers contract should already prevent this from
-    # happening, but this sync function never inserts regardless.
+def test_sync_components_register_inserts_a_genuinely_new_invoice_number():
+    # Real design change (2026-10-20): components_register.py's own
+    # build_components_register_rows already rules out the known
+    # split/drift ambiguity before a row ever reaches here, so an
+    # invoice number not yet in the sheet is now safely auto-inserted --
+    # same as Freight/Overhead.
     client = FakeSheetsClient({
         169: ["INV-26Q1PKG", "09/24/2025", "09/24/2025", 3830.0, "", "", "", "", "", "", "", ""],
+        170: ["", "", "", "", "", "", "", "", "", "", "", ""],
     })
     rows = [_row("INV-SOMETHING-ELSE", total_order_amount=Decimal("100.00"))]
 
-    updated_rows, backfills = sync_components_register(
+    new_rows, updated_rows, backfills = sync_components_register(
         client, "sheet1", "1 TRANSACTIONS", section_c_start_row=169, section_a_start_row=6,
         register_rows=rows, apply=True,
     )
 
+    assert new_rows == rows
     assert updated_rows == []
-    assert backfills == []
-    # The unconditional Flag Reason header write is the one harmless
-    # exception -- no row CONTENT write for the unmatched invoice.
-    assert not any(a1_range.startswith("'1 TRANSACTIONS'!A") for a1_range, _values in client.updates)
-    assert client.chip_writes in ([], [[]])
+    assert client._rows[170][0] == "INV-SOMETHING-ELSE"
+    assert client._rows[170][3] == 100.0
 
 
 def test_sync_components_register_updates_existing_row_and_backfills_section_a():
@@ -75,11 +76,12 @@ def test_sync_components_register_updates_existing_row_and_backfills_section_a()
              deposit_payment_link="2025-09-24_WHSM_Comp_INV-26Q1PKG_pconf1.pdf"),
     ]
 
-    updated_rows, backfills = sync_components_register(
+    new_rows, updated_rows, backfills = sync_components_register(
         client, "sheet1", "1 TRANSACTIONS", section_c_start_row=169, section_a_start_row=6,
         register_rows=rows, apply=True,
     )
 
+    assert new_rows == []
     assert updated_rows == [(169, rows[0])]
     assert backfills == [(rows[0], 6, "matched")]
     assert client._rows[169][0] == "INV-26Q1PKG"
@@ -160,7 +162,7 @@ def test_sync_components_register_does_not_reflag_an_invoice_matched_in_a_previo
         _row("INV-26Q1PKG", balance_paid_date=date(2025, 9, 24), total_order_amount=Decimal("3830.00")),
     ]
 
-    _updated_rows, backfills = sync_components_register(
+    _new_rows, _updated_rows, backfills = sync_components_register(
         client, "sheet1", "1 TRANSACTIONS", section_c_start_row=169, section_a_start_row=6,
         register_rows=rows, apply=True,
     )
@@ -263,11 +265,12 @@ def test_sync_components_register_dry_run_previews_backfill_without_writing():
         _row("INV-26Q1PKG", balance_paid_date=date(2025, 9, 24), total_order_amount=Decimal("3830.00")),
     ]
 
-    updated_rows, backfills = sync_components_register(
+    new_rows, updated_rows, backfills = sync_components_register(
         client, "sheet1", "1 TRANSACTIONS", section_c_start_row=169, section_a_start_row=6,
         register_rows=rows, apply=False,
     )
 
+    assert new_rows == []
     assert updated_rows == [(169, rows[0])]
     assert backfills == [(rows[0], 6, "matched")]
     assert client.updates == []
