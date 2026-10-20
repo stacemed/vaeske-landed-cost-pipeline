@@ -54,3 +54,26 @@ def extract_text_with_ocr_fallback(data: bytes) -> tuple[str, bool]:
     from .ocr import extract_text_via_ocr
 
     return extract_text_via_ocr(data), True
+
+
+# Confirmed real (2026-10-20): a scan/screenshot sometimes gets filed
+# with its NATIVE image extension instead of being converted to PDF
+# first (a Components payment confirmation filed as ``.jpg``). Feeding
+# that through the PDF-only path above crashes pypdf outright -- it
+# isn't a PDF with no text layer, it isn't a PDF at all.
+_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff"}
+
+
+def extract_text_from_file(data: bytes, extension: str) -> tuple[str, bool]:
+    """Like ``extract_text_with_ocr_fallback``, but dispatches straight
+    to OCR-ing the raw image when ``extension`` (a filed document's own
+    extension, from its standardized filename) names an image format
+    rather than a PDF -- skipping the PDF-parsing attempt that would
+    otherwise crash on it. Every other extension is treated as a PDF, as
+    before.
+    """
+    if extension.lower() in _IMAGE_EXTENSIONS:
+        from .ocr import extract_text_from_image_bytes
+
+        return extract_text_from_image_bytes(data), True
+    return extract_text_with_ocr_fallback(data)

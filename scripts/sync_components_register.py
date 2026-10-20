@@ -68,7 +68,7 @@ import argparse
 import sys
 
 from landed_cost.drive.google_client import GoogleDriveClient
-from landed_cost.drive.pdf_text import extract_text_with_ocr_fallback
+from landed_cost.drive.pdf_text import extract_text_from_file
 from landed_cost.models.documents import SourceDocument
 from landed_cost.sheets.components_register import build_components_register_rows
 from landed_cost.sheets.components_sync import read_existing_c_register, sync_components_register
@@ -97,9 +97,9 @@ def _read_components_documents(
                 continue
             print(f"Reading {child.name}...")
             data = drive_client.download_file(child.id)
-            text, used_ocr = extract_text_with_ocr_fallback(data)
+            text, used_ocr = extract_text_from_file(data, doc.extension)
             if used_ocr:
-                print(f"  (used OCR -- {child.name} has no real text layer)")
+                print(f"  (used OCR -- {child.name} has no real text layer, or isn't a PDF at all)")
             documents.append((doc, text))
             file_ids[child.name] = child.id
     return documents, file_ids
