@@ -24,9 +24,9 @@ import re
 from .client import SheetsClient
 
 # Matches "E · OVERHEAD INVOICE REGISTER" / "D · FREIGHT INVOICE
-# REGISTER" (and would match a future "C · COMPONENT INVOICE REGISTER"
-# the same way) without depending on the exact bullet character or
-# spacing.
+# REGISTER" / "C · COMPONENT INVOICE REGISTER" without depending on the
+# exact bullet character or spacing.
+SECTION_C_TITLE_PATTERN = re.compile(r"COMPONENT\s+INVOICE\s+REGISTER", re.IGNORECASE)
 SECTION_D_TITLE_PATTERN = re.compile(r"FREIGHT\s+INVOICE\s+REGISTER", re.IGNORECASE)
 SECTION_E_TITLE_PATTERN = re.compile(r"OVERHEAD\s+INVOICE\s+REGISTER", re.IGNORECASE)
 

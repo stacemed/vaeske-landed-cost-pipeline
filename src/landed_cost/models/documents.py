@@ -32,6 +32,7 @@ still maps to ``BALANCE_INVOICE`` / ``PAYMENT_CONFIRMATION_BALANCE``);
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import PurePath
 
@@ -57,9 +58,30 @@ _DOC_TYPE_PREFIXES = (
     ("pconf", DocumentType.PAYMENT_CONFIRMATION),
 )
 
+# Real, already-filed Components filenames (confirmed 2026-10-20) use a
+# few one-off phrasings for a balance invoice beyond the documented
+# "inv-bal[N]" convention -- "paid" and "bal" combined in either order,
+# with no digit at all ("INV-bal-paid.pdf", "INV-paid-bal.pdf"). Checked
+# as an exact-token alias, not a prefix, since neither word order starts
+# with "inv-bal" or "inv-paid" in a way the general prefix rule below
+# would catch (a numbered variant like "inv-bal2-paid" already matches
+# the ordinary "inv-bal" + digit rule and needs no special case).
+_BALANCE_INVOICE_ALIASES = ("inv-bal-paid", "inv-paid-bal")
+
+# Also confirmed real (2026-10-20): a bare numbered "pconf-1"/"pconf-2"
+# with no "-dep"/"-bal"/"-full" qualifier at all, used in practice for a
+# balance paid off across more than one wire -- the general "pconf" +
+# digit rule below doesn't fire for these because the digit isn't
+# immediately after "pconf" (there's a hyphen in between).
+_BARE_NUMBERED_PCONF_RE = re.compile(r"^pconf-\d+$")
+
 
 def _classify_doc_type(token: str) -> DocumentType:
     lowered = token.lower()
+    if lowered in _BALANCE_INVOICE_ALIASES:
+        return DocumentType.BALANCE_INVOICE
+    if _BARE_NUMBERED_PCONF_RE.match(lowered):
+        return DocumentType.PAYMENT_CONFIRMATION_BALANCE
     for prefix, doc_type in _DOC_TYPE_PREFIXES:
         if lowered == prefix or (lowered.startswith(prefix) and lowered[len(prefix) :][:1].isdigit()):
             return doc_type
