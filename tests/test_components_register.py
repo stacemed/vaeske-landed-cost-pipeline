@@ -170,6 +170,30 @@ def test_build_components_register_rows_reports_an_invoice_number_that_only_rese
     assert unmatched[0].invoice_number == "INV-25Q4RPC26S"
 
 
+def test_build_components_register_rows_catches_a_same_order_family_discovered_in_one_run():
+    # Real confirmed case (2026-10-20): a single wire confirmation covers
+    # TWO separate, genuinely new orders at once ("invoices 231201 racks
+    # 2401R packaging" in its own memo text), filed under their combined
+    # invoice number ("INV-USR2312-01-USPKG-2401R"). "INV-USR2312-01" and
+    # "INV-USPKG-2401R" don't resemble EACH OTHER (no prefix relationship
+    # at all) -- real evidence they're two distinct orders -- so both
+    # become their own new row. The combined pconf's invoice number
+    # resembles "INV-USR2312-01" (a prefix of it), so it's reported as
+    # unmatched instead of becoming a confusing THIRD row -- a human
+    # attaches it to the right order(s) by hand.
+    documents = [
+        (_doc("2024-01-06_WHSM_Comp_INV-USR2312-01_INV-bal.pdf"), WHSM_BALANCE_INVOICE_TEXT),
+        (_doc("2024-01-06_WHSM_Comp_INV-USPKG-2401R_INV-full.pdf"), WHSM_FULL_INVOICE_TEXT),
+        (_doc("2024-01-06_WHSM_Comp_INV-USR2312-01-USPKG-2401R_pconf.pdf"), WHSM_DEPOSIT_PCONF_TEXT),
+    ]
+
+    rows, unmatched = build_components_register_rows(documents, existing_invoice_numbers=set())
+
+    assert {row.invoice_number for row in rows} == {"INV-USR2312-01", "INV-USPKG-2401R"}
+    assert len(unmatched) == 1
+    assert unmatched[0].invoice_number == "INV-USR2312-01-USPKG-2401R"
+
+
 def test_build_components_register_rows_matches_case_insensitively():
     documents = [
         (_doc("2024-10-12_WHSM_Comp_INV-24Q4SLV_INV-dep.pdf"), WHSM_DEPOSIT_INVOICE_TEXT),
