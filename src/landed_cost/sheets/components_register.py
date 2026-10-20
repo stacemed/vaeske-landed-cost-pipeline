@@ -38,6 +38,26 @@ documents (2026-10-20):
   the register at all -- IS safely auto-inserted as a brand-new row (the
   project owner's own choice, 2026-10-20, once the split/drift ambiguity
   above is ruled out this way): see ``build_components_register_rows``.
+  The same ambiguity can also surface among brand-new orders discovered
+  for the FIRST time in one run, with nothing in the register yet at
+  all -- confirmed real case: a single wire confirmation covering two
+  separate new orders at once, filed under their combined invoice number
+  ("INV-USR2312-01-USPKG-2401R"), where "INV-USR2312-01" is ALSO
+  separately one of those orders' own real invoice number. Checked the
+  same way, just against every invoice number already accepted this run
+  too, not only the register's original contents.
+- Not every real same-order variant is this close a match, and this
+  module makes no attempt to catch the rest: a real balance payment
+  confirmation filed under "US3RD24" (no "INV-" prefix, different
+  internal reference entirely) is, per its own wire memo ("racks invoice
+  US3RD24 03") and matching dollar amount, the SAME order as
+  "INV-US3rdR24-03" -- but shares no prefix relationship with it at all,
+  so it becomes its own new row rather than resembling anything. This
+  kind of drift needs a human's judgment (matching dollar amounts/dates
+  across completely different naming schemes is not something this
+  module tries to guess at); the project owner should expect to
+  occasionally merge two auto-inserted rows by hand after reviewing a
+  run's output.
 - "Total Order $" is extracted from whichever filed document states it
   most reliably (tried in order: deposit invoice, balance invoice, full
   invoice), using known label phrasings per vendor -- "Sub Total" and
@@ -212,20 +232,29 @@ def _filenames_and_ids(
     return ", ".join(names), [file_ids[n] for n in names if n in file_ids]
 
 
-def _resembles_an_existing_invoice_number(lowered: str, existing_lower: dict[str, str]) -> bool:
+def _resembles_an_existing_invoice_number(lowered: str, known_lower: dict[str, str]) -> bool:
     """True when ``lowered`` (already-lowercased, not an exact match to
-    anything in ``existing_lower``) looks like a drifted or split variant
-    of an invoice number ALREADY in the register, rather than a genuinely
-    new order -- a prefix relationship either direction catches both real
-    confirmed cases (2026-10-20): a shared deposit's own invoice number
-    ("INV-25Q4RPC26S") being a prefix of two existing split-order rows
-    ("INV-25Q4RPC26S-B01"/"-B02"), and a differently-suffixed deposit for
-    an order that already has a register row under its balance invoice's
-    own number ("INV-2505RK-DPS" vs. existing "INV-2505RK"). Such a
+    anything in ``known_lower``) looks like a drifted or split variant of
+    an invoice number ALREADY known -- a prefix relationship either
+    direction catches three real confirmed cases (2026-10-20): a shared
+    deposit's own invoice number ("INV-25Q4RPC26S") being a prefix of two
+    existing split-order rows ("INV-25Q4RPC26S-B01"/"-B02"); a
+    differently-suffixed deposit for an order that already has a
+    register row under its balance invoice's own number
+    ("INV-2505RK-DPS" vs. existing "INV-2505RK"); and a single wire
+    confirmation covering two newly-seen orders at once, filed under
+    their combined invoice number ("INV-USR2312-01-USPKG-2401R", a
+    prefix of which -- "INV-USR2312-01" -- is also separately a brand-new
+    order's own invoice number THIS SAME RUN). ``known_lower`` is
+    therefore the register's existing invoice numbers PLUS every new one
+    already accepted as genuinely new earlier in this same run (see the
+    caller) -- not just the register's original contents -- so this
+    catches a same-order family discovered for the first time in one
+    batch, not only one where part of it was already registered. Such a
     document is never auto-inserted as its own new row -- see this
     module's docstring.
     """
-    return any(lowered.startswith(existing) or existing.startswith(lowered) for existing in existing_lower)
+    return any(lowered.startswith(known) or known.startswith(lowered) for known in known_lower)
 
 
 def build_components_register_rows(
@@ -262,11 +291,25 @@ def build_components_register_rows(
     groups: dict[str, list[tuple[SourceDocument, str]]] = {}
     canonical_by_lower: dict[str, str] = dict(existing_lower)
     unmatched: list[SourceDocument] = []
-    for doc, text in documents:
+    # Sorted by invoice number -- not Drive's own (unstable) listing
+    # order -- so which document "wins" as a brand-new order's anchor is
+    # deterministic across runs. This also means a shorter invoice number
+    # always wins over a longer one it's a prefix of (a Python string
+    # sorts before any string it's a strict prefix of), which is usually
+    # the more canonical one anyway -- see the real
+    # "INV-USR2312-01"/"INV-USR2312-01-USPKG-2401R" case below.
+    for doc, text in sorted(documents, key=lambda pair: (pair[0].invoice_number.lower(), pair[0].raw_filename)):
         lowered = doc.invoice_number.lower()
         canonical = canonical_by_lower.get(lowered)
         if canonical is None:
-            if _resembles_an_existing_invoice_number(lowered, existing_lower):
+            # Checked against every invoice number already known, not
+            # just the register's original contents -- see
+            # _resembles_an_existing_invoice_number's docstring for the
+            # real case (2026-10-20) this also catches: a combined-
+            # invoice-number document ("INV-USR2312-01-USPKG-2401R")
+            # discovered in the SAME run as one of its own two real
+            # orders ("INV-USR2312-01"), neither yet in the register.
+            if _resembles_an_existing_invoice_number(lowered, canonical_by_lower):
                 unmatched.append(doc)
                 continue
             # Genuinely new -- group under this document's own invoice
