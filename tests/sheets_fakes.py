@@ -27,6 +27,7 @@ class FakeSheetsClient:
         self._rows = dict(rows)
         self.updates: list[tuple[str, list[list[object]]]] = []
         self.inserts: list[tuple[int, int]] = []
+        self.deletes: list[tuple[int, int]] = []
         self.sorts: list[tuple[int, int, int, bool, int]] = []
         self.row_flag_calls: list[tuple[list[tuple[int, bool]], int]] = []
         self.chip_writes: list[list[tuple[int, int, list[str]]]] = []
@@ -80,6 +81,16 @@ class FakeSheetsClient:
         # row number first so nothing gets clobbered mid-shift.
         for row_number in sorted((r for r in self._rows if r >= start_row), reverse=True):
             self._rows[row_number + num_rows] = self._rows.pop(row_number)
+
+    def delete_rows(self, spreadsheet_id: str, sheet_id: int, start_row: int, num_rows: int) -> None:
+        self.deletes.append((start_row, num_rows))
+        end_row = start_row + num_rows - 1
+        for row_number in range(start_row, end_row + 1):
+            self._rows.pop(row_number, None)
+        # Shift every row after the deleted range up by num_rows --
+        # lowest row number first so nothing gets clobbered mid-shift.
+        for row_number in sorted(r for r in self._rows if r > end_row):
+            self._rows[row_number - num_rows] = self._rows.pop(row_number)
 
     def sort_range(
         self,

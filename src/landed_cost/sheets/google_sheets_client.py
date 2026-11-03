@@ -111,6 +111,25 @@ class GoogleSheetsClient:
         }
         self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
 
+    def delete_rows(self, spreadsheet_id: str, sheet_id: int, start_row: int, num_rows: int) -> None:
+        start_index = start_row - 1  # Sheets API GridRange is 0-indexed
+        end_index = start_index + num_rows
+        body = {
+            "requests": [
+                {
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": start_index,
+                            "endIndex": end_index,
+                        },
+                    }
+                }
+            ]
+        }
+        self._service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+
     def format_row_flags(
         self,
         spreadsheet_id: str,
