@@ -46,6 +46,23 @@ def _parse_cell_amount(value: object) -> Decimal | None:
     return None
 
 
+def _is_total_row(invoice_number: str) -> bool:
+    """True when a register section's own trailing "TOTAL ... PAID 20XX"
+    label (Section C/D/E each have one -- "TOTAL COMPONENTS/FREIGHT/
+    OVERHEAD PAID 20XX", confirmed real 2026-11-03) is sitting in the
+    Invoice # column, rather than an actual invoice number.
+
+    A register's existing-row scan must stop HERE, not treat this label
+    as one more existing row (it's non-blank, so a scan that only checks
+    for a blank cell sails right past it) -- otherwise a brand-new row
+    gets inserted AFTER the total instead of before it. Real bug found
+    2026-11-03: 20 new Components rows landed directly under "TOTAL
+    COMPONENTS PAID 2025" on a live run, because the previous boundary
+    check only looked for a blank cell.
+    """
+    return invoice_number.upper().startswith("TOTAL")
+
+
 def read_existing_section_a(
     client: SheetsClient,
     spreadsheet_id: str,

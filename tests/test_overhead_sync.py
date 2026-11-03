@@ -42,6 +42,22 @@ def test_read_existing_e_register_stops_at_blank_invoice_number_not_blank_date()
     assert first_empty_row == 102
 
 
+def test_read_existing_e_register_stops_at_the_total_label_not_past_it():
+    # Real bug found 2026-11-03 (on Components, same boundary logic here):
+    # "TOTAL OVERHEAD PAID 2025" is non-blank, so a boundary check that
+    # only looks for a blank cell treats it as one more existing row.
+    client = FakeSheetsClient({
+        100: ["Wise 1370922330", "", "01/10/2025", 399.0, "", "monthly.pdf"],
+        101: ["TOTAL OVERHEAD PAID 2025", "", "", "", "", ""],
+        102: ["", "", "", "", "", ""],
+    })
+
+    existing, first_empty_row = read_existing_e_register(client, "sheet1", "1 TRANSACTIONS", start_row=100)
+
+    assert existing == {"Wise 1370922330": 100}
+    assert first_empty_row == 101
+
+
 def test_read_section_a_rows_parses_category_and_invoice_number():
     client = FakeSheetsClient({
         6: ["Overhead", "2024-01-11", "Weimin Huang", "", 218.0],
@@ -270,15 +286,15 @@ def test_sync_overhead_register_links_column_a_for_an_invoice_matched_in_a_previ
     assert e_write == '=HYPERLINK("#gid=12345&range=D6", "Inspection-240112")'
 
 
-def test_sync_overhead_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
-    # Same real risk as freight_sync's equivalent test: Section A row 6
-    # is already linked (from an earlier run) to Inspection-240301,
-    # currently at Section E row 100. A brand-new invoice inserted
-    # ahead of it (insert-at-last-row) pushes it down to row 101 -- the
-    # stale link must be rewritten, not left pointing at the wrong row.
+def test_sync_overhead_register_inserting_a_new_row_never_shifts_an_existing_one():
+    # Real design (2026-11-03): a new row always inserts strictly after
+    # every existing row (at the section's own first empty row) -- an
+    # existing, already-matched row never moves just because another
+    # invoice gets added, so its Section A link needs no refresh either.
     client = FakeSheetsClient({
         6: ["Overhead", "2024-03-01", "Weimin Huang", "Inspection-240301", 500.00],
         100: ["Inspection-240301", "02/25/2024", "03/01/2024", 500.0, "", ""],
+        101: ["", "", "", "", "", ""],
     })
     rows = [
         _row("Inspection-240102", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
@@ -290,6 +306,39 @@ def test_sync_overhead_register_refreshes_a_stale_section_a_link_when_a_row_shif
     sync_overhead_register(
         client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
         register_rows=rows, apply=True,
+    )
+
+    assert client._rows[100][0] == "Inspection-240301"
+    assert client._rows[101][0] == "Inspection-240102"
+    d6_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert d6_write == '=HYPERLINK("#gid=12345&range=A100", "Inspection-240301")'
+
+
+def test_sync_overhead_register_refreshes_a_stale_section_a_link_after_sort_moves_a_row():
+    # Same real risk as freight_sync's equivalent test: Section A row 6
+    # is already linked (from an earlier run) to Inspection-240301,
+    # currently at Section E row 100. A new, earlier-dated invoice gets
+    # inserted after it, then --sort reorders the whole section by paid
+    # date -- Inspection-240301 (March) sorts below Inspection-240102
+    # (January), landing at row 101. The stale link must be rewritten to
+    # point at 101, or clicking it would land on the wrong invoice.
+    client = FakeSheetsClient({
+        6: ["Overhead", "2024-03-01", "Weimin Huang", "Inspection-240301", 500.00],
+        100: ["Inspection-240301", "02/25/2024", "03/01/2024", 500.0, "", ""],
+        101: ["", "", "", "", "", ""],
+    })
+    rows = [
+        _row("Inspection-240102", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
+             amount=Decimal("100.00")),
+        _row("Inspection-240301", invoice_date=date(2024, 2, 25), paid_date=date(2024, 3, 1),
+             amount=Decimal("500.00")),
+    ]
+
+    sync_overhead_register(
+        client, "sheet1", "1 TRANSACTIONS", section_e_start_row=100, section_a_start_row=6,
+        register_rows=rows, apply=True, sort=True,
     )
 
     assert client._rows[100][0] == "Inspection-240102"

@@ -25,6 +25,7 @@ from ..models.enums import Category
 from .client import SheetsClient
 from .overhead_register import OverheadRegisterRow
 from .section_a_backfill import SectionATransaction, match_section_a_row, read_section_a_rows, review_reason
+from .sync import _is_total_row
 
 __all__ = [
     "SectionATransaction",
@@ -48,6 +49,8 @@ def read_existing_e_register(
     empty date, unlike Section A: real Section E rows for a monthly
     retainer wire routinely have no Invoice date at all (confirmed on
     the live sheet), so a blank date does not mean the row is unused.
+    Also stops at Section E's own trailing "TOTAL OVERHEAD PAID 20XX"
+    label -- see ``_is_total_row``.
     """
     end_row = start_row + max_rows - 1
     values = client.get_values(spreadsheet_id, f"'{sheet_name}'!A{start_row}:A{end_row}")
@@ -56,7 +59,7 @@ def read_existing_e_register(
     row_number = start_row
     for row in values:
         invoice_number = str(row[0]).strip() if row and row[0] else ""
-        if not invoice_number:
+        if not invoice_number or _is_total_row(invoice_number):
             break
         existing[invoice_number] = row_number
         row_number += 1
@@ -146,9 +149,12 @@ def sync_overhead_register(
         else:
             new_rows.append(row)
 
-    insert_at = (
-        first_empty_row - 1 if first_empty_row > section_e_start_row else section_e_start_row
-    )
+    # first_empty_row now lands exactly on Section E's own trailing
+    # "TOTAL ..." label (or the first truly blank row, if there is no
+    # label) -- see read_existing_e_register/_is_total_row -- so
+    # inserting directly there correctly pushes the label (and
+    # everything below it) down, with new rows landing above it.
+    insert_at = first_empty_row
 
     # Read (never write) Section A even on a dry run, so the preview
     # shows exactly what --apply would do, including ambiguous/no-match

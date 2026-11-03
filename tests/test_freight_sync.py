@@ -39,6 +39,23 @@ def test_read_existing_d_register_stops_at_blank_invoice_number():
     assert first_empty_row == 171
 
 
+def test_read_existing_d_register_stops_at_the_total_label_not_past_it():
+    # Real bug found 2026-11-03 (on Components, same boundary logic here):
+    # "TOTAL FREIGHT PAID 2025" is non-blank, so a boundary check that
+    # only looks for a blank cell treats it as one more existing row.
+    client = FakeSheetsClient({
+        170: ["JG20241225E", "12/26/2024", "01/02/2025", 11842.35, 673.03, "inv.pdf", "inv.pdf",
+              "", "", "2025-01 JAN", "prep.xlsx"],
+        171: ["TOTAL FREIGHT PAID 2025", "", "", "", "", "", "", "", "", "", ""],
+        172: ["", "", "", "", "", "", "", "", "", "", ""],
+    })
+
+    existing, first_empty_row = read_existing_d_register(client, "sheet1", "1 TRANSACTIONS", start_row=170)
+
+    assert existing == {"JG20241225E": 170}
+    assert first_empty_row == 171
+
+
 def test_sync_freight_register_inserts_new_row_and_backfills_section_a_on_combined_total():
     # Section A's Freight/bundling row holds the FULL wire total, not
     # Freight $ alone -- $876.88 + $113.16 = $990.04, matching real data.
@@ -316,19 +333,15 @@ def test_sync_freight_register_links_column_a_for_each_invoice_in_an_existing_co
         assert write == f'=HYPERLINK("#gid=12345&range=D6", "{invoice_number}")'
 
 
-def test_sync_freight_register_refreshes_a_stale_section_a_link_when_a_row_shifts():
-    # Section A row 6 is ALREADY linked (from a previous run) to
-    # JG20240301E, currently sitting at Section D row 170, via a link
-    # that points at row 170. This run inserts a brand-new invoice
-    # ahead of it, which (via the insert-at-last-row trick) pushes
-    # JG20240301E down to row 171 -- the stale link must be rewritten
-    # to point at 171, or clicking it would land on the wrong invoice.
+def test_sync_freight_register_inserting_a_new_row_never_shifts_an_existing_one():
+    # Real design (2026-11-03): a new row always inserts strictly after
+    # every existing row (at the section's own first empty row) -- an
+    # existing, already-matched row never moves just because another
+    # invoice gets added, so its Section A link needs no refresh either.
     client = FakeSheetsClient({
-        # Real reads never return formula source (see _evaluate_cell) --
-        # a HYPERLINK cell written by an earlier run reads back as just
-        # its label, "JG20240301E", exactly like plain text would.
         6: ["Freight / bundling / packaging", "2024-03-01", "FBA Bee", "JG20240301E", 500.00],
         170: ["JG20240301E", "02/25/2024", "03/01/2024", 450.0, 50.0, "", "", "", "", "", "", ""],
+        171: ["", "", "", "", "", "", "", "", "", "", "", ""],
     })
     rows = [
         _row("JG20240102E", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
@@ -340,6 +353,42 @@ def test_sync_freight_register_refreshes_a_stale_section_a_link_when_a_row_shift
     sync_freight_register(
         client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
         register_rows=rows, apply=True,
+    )
+
+    assert client._rows[170][0] == "JG20240301E"
+    assert client._rows[171][0] == "JG20240102E"
+    d6_write = [
+        values[0][0] for a1_range, values in client.updates if a1_range == "'1 TRANSACTIONS'!D6"
+    ][-1]
+    assert d6_write == '=HYPERLINK("#gid=12345&range=A170", "JG20240301E")'
+
+
+def test_sync_freight_register_refreshes_a_stale_section_a_link_after_sort_moves_a_row():
+    # Section A row 6 is ALREADY linked (from a previous run) to
+    # JG20240301E, currently sitting at Section D row 170, via a link
+    # that points at row 170. A new, earlier-dated invoice gets inserted
+    # after it, then --sort reorders the whole section by paid date --
+    # JG20240301E (March) sorts below JG20240102E (January), landing at
+    # row 171. The stale link must be rewritten to point at 171, or
+    # clicking it would land on the wrong invoice.
+    client = FakeSheetsClient({
+        # Real reads never return formula source (see _evaluate_cell) --
+        # a HYPERLINK cell written by an earlier run reads back as just
+        # its label, "JG20240301E", exactly like plain text would.
+        6: ["Freight / bundling / packaging", "2024-03-01", "FBA Bee", "JG20240301E", 500.00],
+        170: ["JG20240301E", "02/25/2024", "03/01/2024", 450.0, 50.0, "", "", "", "", "", "", ""],
+        171: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [
+        _row("JG20240102E", invoice_date=date(2024, 1, 2), paid_date=date(2024, 1, 2),
+             freight_amount=Decimal("100.00"), bundling_amount=Decimal("10.00")),
+        _row("JG20240301E", invoice_date=date(2024, 2, 25), paid_date=date(2024, 3, 1),
+             freight_amount=Decimal("450.00"), bundling_amount=Decimal("50.00")),
+    ]
+
+    sync_freight_register(
+        client, "sheet1", "1 TRANSACTIONS", section_d_start_row=170, section_a_start_row=6,
+        register_rows=rows, apply=True, sort=True,
     )
 
     assert client._rows[170][0] == "JG20240102E"
