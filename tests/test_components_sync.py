@@ -41,6 +41,22 @@ def test_read_existing_c_register_parses_invoice_number_row_total_and_adjustment
     assert first_empty_row == 170
 
 
+def test_read_existing_c_register_stops_at_the_total_label_not_past_it():
+    # Real bug found 2026-11-03: "TOTAL COMPONENTS PAID 2025" is
+    # non-blank, so a boundary check that only looks for a blank cell
+    # treats it as one more existing invoice row.
+    client = FakeSheetsClient({
+        169: ["INV-25Q1SLV26QTINNERBOX-01", "01/15/2025", "03/06/2025", 15182.0, 0.0, "", "", "", "", "", "", ""],
+        170: ["TOTAL COMPONENTS PAID 2025", "", "", 15182.0, "", "", "", "", "", "", "", ""],
+        171: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+
+    existing, first_empty_row = read_existing_c_register(client, "sheet1", "1 TRANSACTIONS", start_row=169)
+
+    assert existing == {"INV-25Q1SLV26QTINNERBOX-01": (169, Decimal("15182.0"), Decimal("0.0"))}
+    assert first_empty_row == 170
+
+
 def test_sync_components_register_inserts_a_genuinely_new_invoice_number():
     # Real design change (2026-10-20): components_register.py's own
     # build_components_register_rows already rules out the known
@@ -62,6 +78,31 @@ def test_sync_components_register_inserts_a_genuinely_new_invoice_number():
     assert updated_rows == []
     assert client._rows[170][0] == "INV-SOMETHING-ELSE"
     assert client._rows[170][3] == 100.0
+
+
+def test_sync_components_register_inserts_a_new_row_above_the_total_label_not_below_it():
+    # Real bug found 2026-11-03: Section C's own trailing "TOTAL
+    # COMPONENTS PAID 2025" label (non-blank) was swept into "existing"
+    # by a boundary check that only looked for a blank cell -- so a
+    # brand-new row landed AFTER the total instead of before it, on a
+    # real --apply run against the live sheet. The total label must end
+    # up pushed down, with the new row landing where it used to be.
+    client = FakeSheetsClient({
+        169: ["INV-26Q1PKG", "09/24/2025", "09/24/2025", 3830.0, "", "", "", "", "", "", "", ""],
+        170: ["TOTAL COMPONENTS PAID 2025", "", "", 3830.0, "", "", "", "", "", "", "", ""],
+        171: ["", "", "", "", "", "", "", "", "", "", "", ""],
+    })
+    rows = [_row("INV-SOMETHING-ELSE", total_order_amount=Decimal("100.00"))]
+
+    new_rows, updated_rows, _backfills = sync_components_register(
+        client, "sheet1", "1 TRANSACTIONS", section_c_start_row=169, section_a_start_row=6,
+        register_rows=rows, apply=True,
+    )
+
+    assert new_rows == rows
+    assert client._rows[170][0] == "INV-SOMETHING-ELSE"
+    assert client._rows[170][3] == 100.0
+    assert client._rows[171][0] == "TOTAL COMPONENTS PAID 2025"
 
 
 def test_sync_components_register_updates_existing_row_and_backfills_section_a():

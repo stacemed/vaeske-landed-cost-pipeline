@@ -32,6 +32,7 @@ from ..models.enums import Category
 from .client import SheetsClient
 from .freight_register import FreightRegisterRow
 from .section_a_backfill import SectionATransaction, match_section_a_row, read_section_a_rows, review_reason
+from .sync import _is_total_row
 
 __all__ = [
     "SectionATransaction",
@@ -51,8 +52,10 @@ def read_existing_d_register(
 ) -> tuple[dict[str, int], int]:
     """Map each already-registered invoice number to its row number.
 
-    Stops at the first row with an empty Invoice # (column A) -- same
-    boundary rule as Section E's read_existing_e_register.
+    Stops at the first row with an empty Invoice # (column A), or at
+    Section D's own trailing "TOTAL FREIGHT PAID 20XX" label -- see
+    ``_is_total_row`` -- same boundary rule as Section E's
+    read_existing_e_register.
     """
     end_row = start_row + max_rows - 1
     values = client.get_values(spreadsheet_id, f"'{sheet_name}'!A{start_row}:A{end_row}")
@@ -61,7 +64,7 @@ def read_existing_d_register(
     row_number = start_row
     for row in values:
         invoice_number = str(row[0]).strip() if row and row[0] else ""
-        if not invoice_number:
+        if not invoice_number or _is_total_row(invoice_number):
             break
         existing[invoice_number] = row_number
         row_number += 1
@@ -201,9 +204,12 @@ def sync_freight_register(
         else:
             new_rows.append(row)
 
-    insert_at = (
-        first_empty_row - 1 if first_empty_row > section_d_start_row else section_d_start_row
-    )
+    # first_empty_row now lands exactly on the section's own trailing
+    # "TOTAL ..." label (or the first truly blank row, if there is no
+    # label) -- see read_existing_d_register/_is_total_row -- so
+    # inserting directly there correctly pushes the label (and
+    # everything below it) down, with new rows landing above it.
+    insert_at = first_empty_row
 
     # Read (never write) Section A even on a dry run, so the preview
     # shows exactly what --apply would do, including ambiguous/no-match

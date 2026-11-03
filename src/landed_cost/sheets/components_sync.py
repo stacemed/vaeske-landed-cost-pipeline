@@ -44,7 +44,7 @@ from ..models.enums import Category
 from .client import SheetsClient
 from .components_register import ComponentRegisterRow
 from .section_a_backfill import SectionATransaction, match_section_a_row, read_section_a_rows, review_reason
-from .sync import _parse_cell_amount
+from .sync import _is_total_row, _parse_cell_amount
 
 __all__ = [
     "SectionATransaction",
@@ -70,8 +70,9 @@ def read_existing_c_register(
     Order $ when this run's own extraction fails, rather than blanking
     a real number. Also returns the first EMPTY row right after the
     last existing one -- where a brand-new row gets inserted. Stops at
-    the first row with an empty Invoice # (column A), same boundary
-    rule as Section D/E.
+    the first row with an empty Invoice # (column A), or at Section C's
+    own trailing "TOTAL COMPONENTS PAID 20XX" label -- see
+    ``_is_total_row`` -- same boundary rule as Section D/E.
     """
     end_row = start_row + max_rows - 1
     values = client.get_values(spreadsheet_id, f"'{sheet_name}'!A{start_row}:E{end_row}")
@@ -80,7 +81,7 @@ def read_existing_c_register(
     row_number = start_row
     for row in values:
         invoice_number = str(row[0]).strip() if row and row[0] else ""
-        if not invoice_number:
+        if not invoice_number or _is_total_row(invoice_number):
             break
         total_order_amount = _parse_cell_amount(row[3]) if len(row) > 3 else None
         invoice_adjustments = _parse_cell_amount(row[4]) if len(row) > 4 else None
@@ -166,11 +167,11 @@ def sync_components_register(
         else:
             new_rows.append(row)
 
-    # Unlike freight_sync.py/overhead_sync.py's equivalent (which backs
-    # up one row and relies on an opt-in --sort pass to fix the
-    # resulting visual reorder), Components has no --sort -- so this
-    # inserts directly at the first empty row, after every existing row,
-    # with nothing already in the sheet shifting out of place.
+    # first_empty_row now lands exactly on Section C's own trailing
+    # "TOTAL ..." label (or the first truly blank row, if there is no
+    # label) -- see read_existing_c_register/_is_total_row -- so
+    # inserting directly there correctly pushes the label (and
+    # everything below it) down, with new rows landing above it.
     insert_at = first_empty_row
 
     # Read (never write) Section A even on a dry run, so the preview
