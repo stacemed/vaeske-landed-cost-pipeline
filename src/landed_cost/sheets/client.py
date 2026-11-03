@@ -60,6 +60,20 @@ class SheetsClient(Protocol):
         """
         ...
 
+    def delete_rows(self, spreadsheet_id: str, sheet_id: int, start_row: int, num_rows: int) -> None:
+        """Delete ``num_rows`` rows starting at ``start_row`` (1-indexed),
+        shifting everything below them up to close the gap -- the
+        inverse of ``insert_rows``.
+
+        Only ever call this bottom-to-top within one section when
+        deleting several non-contiguous ranges in the same run (e.g.
+        splitting a register by year, keeping only one year's rows) --
+        deleting top-down would shift every later row's number out from
+        under a caller still computing further deletions against the
+        original row numbers.
+        """
+        ...
+
     def sort_range(
         self,
         spreadsheet_id: str,
